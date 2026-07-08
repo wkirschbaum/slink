@@ -24,8 +24,8 @@ defmodule Slink.ExampleBotTest do
       transport: :socket_mode
     }
 
-    ctx = %Slink.Context{transport: :socket_mode, bot_token: "xoxb-t"}
-    assert :ok = Slink.ExampleBot.handle_event(event, ctx)
+    context = %Slink.Context{transport: :socket_mode, bot_token: "xoxb-t"}
+    assert :ok = Slink.ExampleBot.handle_event(event, context)
 
     assert_receive {:sent, "xoxb-t", "chat.postMessage", %{channel: "C-example", text: text}},
                    1_000
@@ -36,11 +36,11 @@ defmodule Slink.ExampleBotTest do
   test "ignores and logs other event types" do
     event = %Event{type: "reaction_added", payload: %{}, raw: %{}, transport: :http}
 
-    ctx = %Slink.Context{transport: :http, bot_token: nil}
+    context = %Slink.Context{transport: :http, bot_token: nil}
 
     log =
       capture_log([level: :debug], fn ->
-        assert :ok = Slink.ExampleBot.handle_event(event, ctx)
+        assert :ok = Slink.ExampleBot.handle_event(event, context)
       end)
 
     assert log =~ "unhandled event"

@@ -41,16 +41,16 @@ defmodule MyBot do
   use Slink
 
   @impl true
-  def handle_event(%Slink.Event{type: "app_mention", payload: event}, ctx) do
-    send_message(ctx, event["channel"], "hi <@#{event["user"]}> 👋")
+  def handle_event(%Slink.Event{type: "app_mention", payload: event}, context) do
+    send_message(context, event["channel"], "hi <@#{event["user"]}> 👋")
     :ok
   end
 
-  def handle_event(_event, _ctx), do: :ok
+  def handle_event(_event, _context), do: :ok
 end
 ```
 
-Handlers are **stateless**: to respond, call `send_message(ctx, channel, text)`
+Handlers are **stateless**: to respond, call `send_message(context, channel, text)`
 (imported by `use Slink`). It uses the `bot_token` from the context and routes
 through a **per-channel rate limiter** so you never exceed Slack's ~1 msg/sec/
 channel limit. For other Web API calls use `Slink.API` directly.

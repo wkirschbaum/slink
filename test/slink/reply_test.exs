@@ -7,8 +7,8 @@ defmodule Slink.ReplyTest do
     use Slink
 
     @impl true
-    def handle_event(event, ctx) do
-      reply(ctx, event, "pong")
+    def handle_event(event, context) do
+      reply(context, event, "pong")
       :ok
     end
   end
@@ -25,7 +25,7 @@ defmodule Slink.ReplyTest do
     :ok
   end
 
-  defp ctx, do: %Context{transport: :socket_mode, bot_token: "xoxb"}
+  defp context, do: %Context{transport: :socket_mode, bot_token: "xoxb"}
 
   test "reply/3 threads under the event's existing thread_ts" do
     event = %Event{
@@ -35,7 +35,7 @@ defmodule Slink.ReplyTest do
       transport: :socket_mode
     }
 
-    Bot.handle_event(event, ctx())
+    Bot.handle_event(event, context())
 
     assert_receive {:sent, %{channel: "C-reply-a", text: "pong", thread_ts: "1.0"}}, 1_000
   end
@@ -48,7 +48,7 @@ defmodule Slink.ReplyTest do
       transport: :socket_mode
     }
 
-    Bot.handle_event(event, ctx())
+    Bot.handle_event(event, context())
 
     assert_receive {:sent, %{channel: "C-reply-b", thread_ts: "2.0"}}, 1_000
   end
@@ -60,7 +60,7 @@ defmodule Slink.ReplyTest do
       transport: :socket_mode
     }
 
-    assert :ok = Slink.reply(ctx(), event, "pong", %{thread_ts: "9.9"})
+    assert :ok = Slink.reply(context(), event, "pong", %{thread_ts: "9.9"})
     assert_receive {:sent, %{thread_ts: "9.9"}}, 1_000
   end
 end

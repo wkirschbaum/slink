@@ -22,12 +22,12 @@ defmodule Slink do
         alias Slink.API
 
         @impl true
-        def handle_event(%Slink.Event{type: "app_mention", payload: e}, ctx) do
-          API.post_message(ctx.bot_token, e["channel"], "hi <@\#{e["user"]}> 👋")
+        def handle_event(%Slink.Event{type: "app_mention", payload: e}, context) do
+          API.post_message(context.bot_token, e["channel"], "hi <@\#{e["user"]}> 👋")
           :ok
         end
 
-        def handle_event(_event, _ctx), do: :ok
+        def handle_event(_event, _context), do: :ok
       end
 
   ## Running it (Socket Mode)
@@ -62,8 +62,8 @@ defmodule Slink do
   ~1/sec/channel). `opts` is merged into the request body (e.g. `blocks`,
   `thread_ts`). `use Slink` imports this, so handlers can call it unqualified:
 
-      def handle_event(%Slink.Event{type: "app_mention"} = event, ctx) do
-        send_message(ctx, Slink.Event.channel(event), "hi")
+      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
+        send_message(context, Slink.Event.channel(event), "hi")
       end
   """
   @spec send_message(context(), String.t(), String.t(), map()) :: :ok
@@ -78,8 +78,8 @@ defmodule Slink do
   if the event isn't in a thread yet, to the event's own message, *starting* a
   thread on it. So a reply always stays threaded with what triggered it:
 
-      def handle_event(%Slink.Event{type: "app_mention"} = event, ctx) do
-        reply(ctx, event, "on it 👍")
+      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
+        reply(context, event, "on it 👍")
       end
 
   `opts` is merged into the request body. To reply in the channel (not threaded),

@@ -8,8 +8,8 @@ defmodule Slink.SocketModeTest do
     use Slink
 
     @impl true
-    def handle_event(event, ctx) do
-      send(:socket_mode_sink, {:bot_event, event, ctx})
+    def handle_event(event, context) do
+      send(:socket_mode_sink, {:bot_event, event, context})
       :ok
     end
   end
@@ -18,7 +18,7 @@ defmodule Slink.SocketModeTest do
     use Slink
 
     @impl true
-    def handle_event(_event, _ctx), do: raise("handler boom")
+    def handle_event(_event, _context), do: raise("handler boom")
   end
 
   setup do
@@ -45,12 +45,12 @@ defmodule Slink.SocketModeTest do
 
     assert_receive {:fake_slack, :connected}, 15_000
 
-    assert_receive {:bot_event, %Slink.Event{} = event, ctx}, 15_000
+    assert_receive {:bot_event, %Slink.Event{} = event, context}, 15_000
     assert event.type == "app_mention"
     assert event.transport == :socket_mode
     assert event.envelope_id == "env-1"
     assert event.payload["channel"] == "C1"
-    assert ctx == %Slink.Context{transport: :socket_mode, bot_token: "xoxb-test"}
+    assert context == %Slink.Context{transport: :socket_mode, bot_token: "xoxb-test"}
 
     assert_receive {:fake_slack, :frame, ack}, 15_000
     assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
@@ -135,7 +135,7 @@ defmodule Slink.SocketModeTest do
     start_client(url)
 
     # Despite the junk frames, the real envelope is still handled and ACKed.
-    assert_receive {:bot_event, %Slink.Event{type: "app_mention"}, _ctx}, 15_000
+    assert_receive {:bot_event, %Slink.Event{type: "app_mention"}, _context}, 15_000
     assert_receive {:fake_slack, :frame, ack}, 15_000
     assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
   end
@@ -147,7 +147,7 @@ defmodule Slink.SocketModeTest do
     start_client(url, open_connection: fn -> {:ok, url <> "?ticket=abc123"} end)
 
     assert_receive {:fake_slack, :connected}, 15_000
-    assert_receive {:bot_event, _event, _ctx}, 15_000
+    assert_receive {:bot_event, _event, _context}, 15_000
   end
 
   test "a crashing handler does not take down the socket (still ACKs, stays alive)" do
@@ -172,7 +172,7 @@ defmodule Slink.SocketModeTest do
     capture_log(fn ->
       start_client(url)
       # The bad frame is ignored and the following real envelope is dispatched.
-      assert_receive {:bot_event, %Slink.Event{type: "app_mention"}, _ctx}, 15_000
+      assert_receive {:bot_event, %Slink.Event{type: "app_mention"}, _context}, 15_000
     end)
   end
 

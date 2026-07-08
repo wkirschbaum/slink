@@ -9,7 +9,7 @@ defmodule Slink.EventsApi.PlugTest do
     use Slink
 
     @impl true
-    def handle_event(event, _ctx) do
+    def handle_event(event, _context) do
       # Report back to the test process registered under the event's channel.
       case Process.whereis(:plug_test_sink) do
         nil -> :ok

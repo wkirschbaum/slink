@@ -17,21 +17,21 @@ defmodule Slink.ExampleBot do
   alias Slink.Event
 
   @impl true
-  def handle_event(%Event{type: "app_mention"} = event, ctx) do
+  def handle_event(%Event{type: "app_mention"} = event, context) do
     user = event.payload["user"]
 
     # reply/3 threads automatically — in a thread it stays in the thread,
     # otherwise it starts one on the message that mentioned us.
     if Event.in_thread?(event) do
-      reply(ctx, event, "hi <@#{user}> 👋 (replying in this thread)")
+      reply(context, event, "hi <@#{user}> 👋 (replying in this thread)")
     else
-      reply(ctx, event, "hi <@#{user}> 👋")
+      reply(context, event, "hi <@#{user}> 👋")
     end
 
     :ok
   end
 
-  def handle_event(%Event{type: type}, _ctx) do
+  def handle_event(%Event{type: type}, _context) do
     Logger.debug("ExampleBot: unhandled event #{inspect(type)}")
     :ok
   end

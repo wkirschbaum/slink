@@ -8,7 +8,7 @@ defmodule Slink.DispatcherTest do
     use Slink
 
     @impl true
-    def handle_event(event, _ctx) do
+    def handle_event(event, _context) do
       send(:dispatcher_sink, {:handled, event.type})
       :ok
     end
@@ -18,7 +18,7 @@ defmodule Slink.DispatcherTest do
     use Slink
 
     @impl true
-    def handle_event(_event, _ctx), do: raise("boom")
+    def handle_event(_event, _context), do: raise("boom")
   end
 
   defmodule NoCallbackBot do
@@ -30,23 +30,23 @@ defmodule Slink.DispatcherTest do
   end
 
   defp event, do: %Event{type: "app_mention", payload: %{}, raw: %{}, transport: :socket_mode}
-  defp ctx, do: %Context{transport: :socket_mode, bot_token: nil}
+  defp context, do: %Context{transport: :socket_mode, bot_token: nil}
 
   test "invokes the module's handle_event/2" do
-    assert :ok = Dispatcher.dispatch(GoodBot, event(), ctx())
+    assert :ok = Dispatcher.dispatch(GoodBot, event(), context())
     assert_received {:handled, "app_mention"}
   end
 
   test "lets a handler crash propagate (containment is the task's job, not a rescue)" do
     assert_raise RuntimeError, "boom", fn ->
-      Dispatcher.dispatch(CrashBot, event(), ctx())
+      Dispatcher.dispatch(CrashBot, event(), context())
     end
   end
 
   test "warns and returns :ok when the module has no handle_event/2" do
     log =
       capture_log(fn ->
-        assert :ok = Dispatcher.dispatch(NoCallbackBot, event(), ctx())
+        assert :ok = Dispatcher.dispatch(NoCallbackBot, event(), context())
       end)
 
     assert log =~ "does not implement handle_event/2"
@@ -69,7 +69,7 @@ defmodule Slink.DispatcherTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    assert :ok = Dispatcher.async(GoodBot, event(), ctx())
+    assert :ok = Dispatcher.async(GoodBot, event(), context())
 
     assert_receive {:telemetry, %{type: "app_mention", transport: :socket_mode, module: GoodBot}},
                    1_000
