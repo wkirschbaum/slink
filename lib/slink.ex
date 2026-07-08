@@ -22,7 +22,7 @@ defmodule Slink do
         alias Slink.Event
 
         @impl true
-        def handle_event(%Slink.Event{type: "app_mention"} = event, _context) do
+        def handle_event(%Slink.Event{type: :app_mention} = event, _context) do
           # Return a reply and slink sends it (placement: to: :auto by default).
           {:reply, "hi <@\#{Event.user(event)}> 👋"}
         end
@@ -30,11 +30,11 @@ defmodule Slink do
         def handle_event(_event, _context), do: :ok
       end
 
-  Or reply imperatively — `reply/4` returns `:ok`, so it can be the last
+  Or reply imperatively — `reply/3` returns `:ok`, so it can be the last
   expression, and `to:` picks where it lands (`:auto`, `:thread`, `:channel`):
 
-      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
-        reply(context, event, Event.text_without_mention(event), to: :channel)
+      def handle_event(%Slink.Event{type: :app_mention} = event, context) do
+        reply(context, Event.command(event), to: :channel)
       end
 
   ## Running it (Socket Mode)
@@ -80,11 +80,10 @@ defmodule Slink do
   What a handler returns:
 
     * `:ok` — done, no reply.
-    * `{:reply, text}` — slink replies with `text` via `reply/4` with the
+    * `{:reply, text}` — slink replies with `text` via `reply/3` with the
       default `to: :auto` placement (threaded if the event is in a thread,
-      otherwise inline). Saves the handler from threading `context` around and
-      calling `reply/4` itself.
-    * `{:reply, text, opts}` — same, passing `opts` to `reply/4`: `to: :thread`
+      otherwise inline).
+    * `{:reply, text, opts}` — same, passing `opts` to `reply/3`: `to: :thread`
       / `to: :channel` to force placement, and `blocks: [...]` /
       `attachments: [...]` for **rich replies**. `text` is still sent as the
       notification/fallback Slack shows in previews, so always provide something
@@ -128,14 +127,15 @@ defmodule Slink do
   defdelegate in_thread?(event), to: Slink.Event
 
   @doc """
-  Reply to an `event` (imported by `use Slink`). Returns `:ok`, so a handler can
-  end with it — no trailing `:ok` needed:
+  Reply to the event in `context` (imported by `use Slink`). Returns `:ok`, so a
+  handler can end with it — no trailing `:ok` needed:
 
-      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
-        reply(context, event, "on it 👍")
+      def handle_event(%Slink.Event{type: :app_mention} = event, context) do
+        reply(context, "on it 👍")
       end
 
-  Where the reply lands is controlled by `opts[:to]`:
+  The channel and thread come from `context.event` (set by the dispatcher), so
+  no event argument is needed. Where the reply lands is controlled by `opts[:to]`:
 
     * `:auto` (default) — **dynamic**: in the thread if the event is in one,
       otherwise inline in the channel.
@@ -148,12 +148,12 @@ defmodule Slink do
   replies**: `blocks: [...]` (Block Kit), `attachments: [...]`, an explicit
   `thread_ts:`, etc.
 
-      reply(context, event, "deployed ✅", to: :channel, blocks: blocks)
+      reply(context, "deployed ✅", to: :channel, blocks: blocks)
   """
-  @spec reply(context(), Slink.Event.t(), String.t(), keyword()) :: :ok
-  def reply(context, event, text, opts \\ [])
+  @spec reply(context(), String.t(), keyword()) :: :ok
+  def reply(context, text, opts \\ [])
 
-  def reply(%Slink.Context{} = context, %Slink.Event{} = event, text, opts) do
+  def reply(%Slink.Context{event: %Slink.Event{} = event} = context, text, opts) do
     {to, body} = Keyword.pop(opts, :to, :auto)
 
     body =
@@ -174,7 +174,7 @@ defmodule Slink do
     quote do
       @behaviour Slink
 
-      import Slink, only: [send_message: 3, send_message: 4, reply: 3, reply: 4, in_thread?: 1]
+      import Slink, only: [send_message: 3, send_message: 4, reply: 2, reply: 3, in_thread?: 1]
     end
   end
 end

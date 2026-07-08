@@ -15,7 +15,7 @@ defmodule Slink.EventTest do
       }
 
       assert %Event{
-               type: "app_mention",
+               type: :app_mention,
                kind: :event_callback,
                transport: :socket_mode,
                envelope_id: "abc-123",
@@ -30,7 +30,7 @@ defmodule Slink.EventTest do
         "payload" => %{"command" => "/slink", "text" => "hi"}
       }
 
-      assert %Event{type: "slash_commands", kind: :slash_commands, envelope_id: "e-1"} =
+      assert %Event{type: :slash_commands, kind: :slash_commands, envelope_id: "e-1"} =
                Event.from_socket_mode(envelope)
     end
 
@@ -47,12 +47,12 @@ defmodule Slink.EventTest do
         "event" => %{"type" => "message", "text" => "yo", "subtype" => nil}
       }
 
-      assert %Event{type: "message", kind: :event_callback, transport: :http} =
+      assert %Event{type: :message, kind: :event_callback, transport: :http} =
                Event.from_http(body)
     end
 
     test "keeps url_verification as-is for the plug to answer" do
-      assert %Event{type: "url_verification"} =
+      assert %Event{type: :url_verification} =
                Event.from_http(%{"type" => "url_verification", "challenge" => "xyz"})
     end
   end
@@ -105,14 +105,14 @@ defmodule Slink.EventTest do
 
     test "mention?/1 is true for app_mention events" do
       assert Event.mention?(%Event{
-               type: "app_mention",
+               type: :app_mention,
                payload: %{},
                raw: %{},
                transport: :socket_mode
              })
 
       refute Event.mention?(%Event{
-               type: "message",
+               type: :message,
                payload: %{},
                raw: %{},
                transport: :socket_mode
@@ -127,11 +127,11 @@ defmodule Slink.EventTest do
       assert Event.mentions(msg(%{"text" => "no mentions here"})) == []
     end
 
-    test "text_without_mention/1 strips a leading mention and trims" do
-      assert Event.text_without_mention(msg(%{"text" => "<@U0BOT> deploy now"})) == "deploy now"
-      assert Event.text_without_mention(msg(%{"text" => "   <@U0BOT>   hi  "})) == "hi"
+    test "command/1 strips a leading mention and trims" do
+      assert Event.command(msg(%{"text" => "<@U0BOT> deploy now"})) == "deploy now"
+      assert Event.command(msg(%{"text" => "   <@U0BOT>   hi  "})) == "hi"
       # No leading mention: returned trimmed, unchanged otherwise.
-      assert Event.text_without_mention(msg(%{"text" => "just text"})) == "just text"
+      assert Event.command(msg(%{"text" => "just text"})) == "just text"
     end
   end
 end

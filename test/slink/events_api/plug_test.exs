@@ -61,7 +61,7 @@ defmodule Slink.EventsApi.PlugTest do
     conn = Slink.EventsApi.Plug.call(signed_conn(body), opts())
 
     assert conn.status == 200
-    assert_receive {:event, %Slink.Event{type: "app_mention", transport: :http}}, 1_000
+    assert_receive {:event, %Slink.Event{type: :app_mention, transport: :http}}, 1_000
   end
 
   test "rejects a bad signature" do

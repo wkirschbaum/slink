@@ -46,11 +46,14 @@ defmodule Slink.SocketModeTest do
     assert_receive {:fake_slack, :connected}, 15_000
 
     assert_receive {:bot_event, %Slink.Event{} = event, context}, 15_000
-    assert event.type == "app_mention"
+    assert event.type == :app_mention
     assert event.transport == :socket_mode
     assert event.envelope_id == "env-1"
     assert event.payload["channel"] == "C1"
-    assert context == %Slink.Context{transport: :socket_mode, bot_token: "xoxb-test"}
+    assert context.transport == :socket_mode
+    assert context.bot_token == "xoxb-test"
+    # The dispatcher embeds the event in the context so reply/3 needs only it.
+    assert context.event == event
 
     assert_receive {:fake_slack, :frame, ack}, 15_000
     assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
@@ -163,7 +166,7 @@ defmodule Slink.SocketModeTest do
     start_client(url)
 
     # Despite the junk frames, the real envelope is still handled and ACKed.
-    assert_receive {:bot_event, %Slink.Event{type: "app_mention"}, _context}, 15_000
+    assert_receive {:bot_event, %Slink.Event{type: :app_mention}, _context}, 15_000
     assert_receive {:fake_slack, :frame, ack}, 15_000
     assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
   end
@@ -200,7 +203,7 @@ defmodule Slink.SocketModeTest do
     capture_log(fn ->
       start_client(url)
       # The bad frame is ignored and the following real envelope is dispatched.
-      assert_receive {:bot_event, %Slink.Event{type: "app_mention"}, _context}, 15_000
+      assert_receive {:bot_event, %Slink.Event{type: :app_mention}, _context}, 15_000
     end)
   end
 

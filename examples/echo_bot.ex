@@ -17,7 +17,7 @@ defmodule Slink.ExampleBot do
   alias Slink.Event
 
   @impl true
-  def handle_event(%Event{type: "app_mention"} = event, _context) do
+  def handle_event(%Event{type: :app_mention} = event, _context) do
     # Return the reply and slink sends it. `to: :auto` (the default) keeps it in
     # the thread when the mention was in one, otherwise answers inline.
     {:reply, "hi <@#{Event.user(event)}> 👋"}

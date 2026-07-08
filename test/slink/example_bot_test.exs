@@ -18,7 +18,7 @@ defmodule Slink.ExampleBotTest do
 
   test "replies to an app_mention (dispatcher sends the returned reply)" do
     event = %Event{
-      type: "app_mention",
+      type: :app_mention,
       payload: %{"channel" => "C-example", "user" => "U1"},
       raw: %{},
       transport: :socket_mode

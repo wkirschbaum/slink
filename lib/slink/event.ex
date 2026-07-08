@@ -21,7 +21,7 @@ defmodule Slink.Event do
   """
 
   @type t :: %__MODULE__{
-          type: String.t() | nil,
+          type: atom() | String.t() | nil,
           subtype: String.t() | nil,
           payload: map(),
           raw: map(),
@@ -31,6 +31,27 @@ defmodule Slink.Event do
         }
 
   defstruct [:type, :subtype, :payload, :raw, :transport, :kind, :envelope_id]
+
+  # Known Slack types are surfaced as atoms so handlers can match `:app_mention`
+  # instead of `"app_mention"`. Unknown types stay as their raw string — we never
+  # create atoms from arbitrary Slack input (unbounded atoms crash the VM). The
+  # atoms below are created at compile time, so the runtime lookup is allocation
+  # free.
+  @known_types ~w(
+    app_mention message
+    reaction_added reaction_removed
+    app_home_opened
+    member_joined_channel member_left_channel
+    team_join
+    slash_commands interactive url_verification
+  )a
+
+  @type_map Map.new(@known_types, &{Atom.to_string(&1), &1})
+
+  @doc "The atom for a known Slack `type` string, or the string itself if unknown."
+  @spec normalize_type(String.t() | nil) :: atom() | String.t() | nil
+  def normalize_type(nil), do: nil
+  def normalize_type(type) when is_binary(type), do: Map.get(@type_map, type, type)
 
   @doc "The channel the event happened in, or `nil`."
   @spec channel(t()) :: String.t() | nil
@@ -54,7 +75,7 @@ defmodule Slink.Event do
   mentioned in the text, use `mentions/1`.
   """
   @spec mention?(t()) :: boolean()
-  def mention?(%__MODULE__{type: type}), do: type == "app_mention"
+  def mention?(%__MODULE__{type: type}), do: type == :app_mention
 
   @doc """
   User IDs mentioned in the event's text, in order (e.g. `["U0123", "U0456"]`).
@@ -73,14 +94,14 @@ defmodule Slink.Event do
   def mentions?(%__MODULE__{} = event, user_id), do: user_id in mentions(event)
 
   @doc """
-  The event's text with a leading `<@…>` mention stripped and trimmed.
+  The text addressed to the bot: the event's text with a leading `<@…>` mention
+  stripped and trimmed.
 
-  Handy for `app_mention` events, where the text starts with the bot mention —
-  this returns just the part addressed to the bot ("`@bot deploy now`" →
-  "`deploy now`").
+  For `app_mention` events the text starts with the bot mention, so this returns
+  just the instruction ("`@bot deploy now`" → "`deploy now`").
   """
-  @spec text_without_mention(t()) :: String.t()
-  def text_without_mention(%__MODULE__{} = event) do
+  @spec command(t()) :: String.t()
+  def command(%__MODULE__{} = event) do
     event
     |> text()
     |> String.replace(~r/^\s*<@[^>]+>\s*/, "")
@@ -127,7 +148,7 @@ defmodule Slink.Event do
     event = get_in(env, ["payload", "event"]) || %{}
 
     %__MODULE__{
-      type: event["type"],
+      type: normalize_type(event["type"]),
       subtype: event["subtype"],
       payload: event,
       raw: env,
@@ -142,7 +163,7 @@ defmodule Slink.Event do
     kind = %{"slash_commands" => :slash_commands, "interactive" => :interactive}
 
     %__MODULE__{
-      type: type,
+      type: normalize_type(type),
       payload: payload || %{},
       raw: env,
       transport: :socket_mode,
@@ -153,7 +174,7 @@ defmodule Slink.Event do
 
   def from_socket_mode(env) do
     %__MODULE__{
-      type: env["type"],
+      type: normalize_type(env["type"]),
       payload: env,
       raw: env,
       transport: :socket_mode,
@@ -166,7 +187,7 @@ defmodule Slink.Event do
   @spec from_http(map()) :: t()
   def from_http(%{"type" => "event_callback", "event" => event} = body) do
     %__MODULE__{
-      type: event["type"],
+      type: normalize_type(event["type"]),
       subtype: event["subtype"],
       payload: event,
       raw: body,
@@ -177,7 +198,7 @@ defmodule Slink.Event do
 
   def from_http(body) do
     %__MODULE__{
-      type: body["type"],
+      type: normalize_type(body["type"]),
       payload: body,
       raw: body,
       transport: :http,
