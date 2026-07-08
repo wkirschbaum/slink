@@ -63,4 +63,17 @@ defmodule Slink.ReplyTest do
     assert :ok = Slink.reply(context(), event, "pong", %{thread_ts: "9.9"})
     assert_receive {:sent, %{thread_ts: "9.9"}}, 1_000
   end
+
+  test "reply_in_channel/3 posts inline with no thread_ts" do
+    event = %Event{
+      type: "app_mention",
+      payload: %{"channel" => "C-reply-d", "ts" => "2.0", "thread_ts" => "1.0"},
+      raw: %{},
+      transport: :socket_mode
+    }
+
+    assert :ok = Slink.reply_in_channel(context(), event, "inline")
+    assert_receive {:sent, %{channel: "C-reply-d", text: "inline"} = params}, 1_000
+    refute Map.has_key?(params, :thread_ts)
+  end
 end
