@@ -28,7 +28,11 @@ defmodule Slink.Dispatcher do
   # no rescue here: OTP logs and isolates a crashing handler.
   @spec dispatch(module(), Slink.Event.t(), Slink.Context.t()) :: :ok
   def dispatch(module, %Slink.Event{} = event, %Slink.Context{} = context) do
-    if function_exported?(module, :handle_event, 2) do
+    # `function_exported?/3` returns false for a module that hasn't been loaded
+    # yet, and the handler is typically only referenced as a bare atom in config
+    # (`module: MyBot`), so nothing forces it to load before the first event
+    # arrives under lazy code loading. Ensure it's loaded before we check.
+    if Code.ensure_loaded?(module) and function_exported?(module, :handle_event, 2) do
       _ = module.handle_event(event, context)
       :ok
     else

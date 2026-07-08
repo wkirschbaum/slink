@@ -43,6 +43,19 @@ defmodule Slink.DispatcherTest do
     end
   end
 
+  test "loads the handler module before checking for handle_event/2" do
+    # Simulate lazy code loading: the module exists on disk but isn't in memory,
+    # which is the normal state when the bot is only referenced as `module: Bot`
+    # in config and the first Slack event arrives. `function_exported?/3` reports
+    # false for an unloaded module, so dispatch must load it first.
+    :code.purge(Slink.Test.LazyBot)
+    :code.delete(Slink.Test.LazyBot)
+    refute function_exported?(Slink.Test.LazyBot, :handle_event, 2)
+
+    assert :ok = Dispatcher.dispatch(Slink.Test.LazyBot, event(), context())
+    assert_received {:lazy_handled, "app_mention"}
+  end
+
   test "warns and returns :ok when the module has no handle_event/2" do
     log =
       capture_log(fn ->
