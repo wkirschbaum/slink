@@ -182,45 +182,74 @@ defmodule Slink do
   defp threaded?(:auto, event), do: in_thread?(event)
 
   @working_emoji "hourglass_flowing_sand"
+  @working_delay_ms 3_000
 
   @doc """
-  Show a "working on it" indicator on the triggering message while `fun` runs,
-  then clear it (imported by `use Slink`). Returns whatever `fun` returns.
+  Show a "working on it" indicator on the triggering message *only if* the work
+  is slow, then clear it (imported by `use Slink`). Returns whatever `fun`
+  returns.
 
   Slack has no bot "typing…" indicator for channels, so this reacts to the
-  event's message with an emoji (default `#{@working_emoji}` ⏳), runs `fun`, and
-  removes the reaction afterwards — even if `fun` raises:
+  event's message with an emoji (default `#{@working_emoji}` ⏳). To avoid a
+  pointless flicker on fast replies, `fun` runs in a task and the reaction is
+  added **only if it's still running after `:delay_ms`** (default #{@working_delay_ms}ms);
+  it's always removed once `fun` finishes — even if it raises. Fast work shows
+  nothing. So it's safe to wrap any handler:
 
       def handle_event(%Slink.Event{type: :app_mention} = event, context) do
-        working(context, fn -> reply(context, slow_answer(event)) end)
+        working(context, fn -> reply(context, answer(event)) end)
       end
 
   Options:
 
+    * `:delay_ms` — how long to wait before showing the indicator (default
+      `#{@working_delay_ms}`). Use `0` to show it immediately.
     * `:emoji` — reaction name without colons (default `"#{@working_emoji}"`).
 
   Best-effort: reaction API errors are ignored so they never break the handler,
-  and if the event has no message to react to, `fun` just runs.
+  and if the event has no message to react to, `fun` just runs inline.
   """
   @spec working(context(), (-> result), keyword()) :: result when result: var
   def working(context, fun, opts \\ [])
 
   def working(%Slink.Context{event: %Slink.Event{} = event} = context, fun, opts)
       when is_function(fun, 0) do
-    emoji = Keyword.get(opts, :emoji, @working_emoji)
     channel = Slink.Event.channel(event)
     ts = Slink.Event.ts(event)
 
     if is_binary(channel) and is_binary(ts) do
-      _ = Slink.API.add_reaction(context.bot_token, channel, ts, emoji)
-
-      try do
-        fun.()
-      after
-        _ = Slink.API.remove_reaction(context.bot_token, channel, ts, emoji)
-      end
+      emoji = Keyword.get(opts, :emoji, @working_emoji)
+      delay = Keyword.get(opts, :delay_ms, @working_delay_ms)
+      with_indicator(context, fun, channel, ts, emoji, delay)
     else
       fun.()
+    end
+  end
+
+  # Run fun in a task; add the reaction only if it hasn't finished within `delay`,
+  # and always remove it once fun completes. A task exit is re-propagated so a
+  # crashing handler still crashes as it would run inline.
+  defp with_indicator(context, fun, channel, ts, emoji, delay) do
+    task = Task.Supervisor.async_nolink(Slink.TaskSupervisor, fun)
+
+    case Task.yield(task, delay) do
+      {:ok, result} ->
+        result
+
+      {:exit, reason} ->
+        exit(reason)
+
+      nil ->
+        _ = Slink.API.add_reaction(context.bot_token, channel, ts, emoji)
+
+        try do
+          case Task.yield(task, :infinity) do
+            {:ok, result} -> result
+            {:exit, reason} -> exit(reason)
+          end
+        after
+          _ = Slink.API.remove_reaction(context.bot_token, channel, ts, emoji)
+        end
     end
   end
 
