@@ -181,11 +181,63 @@ defmodule Slink do
   defp threaded?(:channel, _event), do: false
   defp threaded?(:auto, event), do: in_thread?(event)
 
+  @working_emoji "hourglass_flowing_sand"
+
+  @doc """
+  Show a "working on it" indicator on the triggering message while `fun` runs,
+  then clear it (imported by `use Slink`). Returns whatever `fun` returns.
+
+  Slack has no bot "typing…" indicator for channels, so this reacts to the
+  event's message with an emoji (default `#{@working_emoji}` ⏳), runs `fun`, and
+  removes the reaction afterwards — even if `fun` raises:
+
+      def handle_event(%Slink.Event{type: :app_mention} = event, context) do
+        working(context, fn -> reply(context, slow_answer(event)) end)
+      end
+
+  Options:
+
+    * `:emoji` — reaction name without colons (default `"#{@working_emoji}"`).
+
+  Best-effort: reaction API errors are ignored so they never break the handler,
+  and if the event has no message to react to, `fun` just runs.
+  """
+  @spec working(context(), (-> result), keyword()) :: result when result: var
+  def working(context, fun, opts \\ [])
+
+  def working(%Slink.Context{event: %Slink.Event{} = event} = context, fun, opts)
+      when is_function(fun, 0) do
+    emoji = Keyword.get(opts, :emoji, @working_emoji)
+    channel = Slink.Event.channel(event)
+    ts = Slink.Event.ts(event)
+
+    if is_binary(channel) and is_binary(ts) do
+      _ = Slink.API.add_reaction(context.bot_token, channel, ts, emoji)
+
+      try do
+        fun.()
+      after
+        _ = Slink.API.remove_reaction(context.bot_token, channel, ts, emoji)
+      end
+    else
+      fun.()
+    end
+  end
+
   defmacro __using__(_opts) do
     quote do
       @behaviour Slink
 
-      import Slink, only: [send_message: 3, send_message: 4, reply: 2, reply: 3, in_thread?: 1]
+      import Slink,
+        only: [
+          send_message: 3,
+          send_message: 4,
+          reply: 2,
+          reply: 3,
+          working: 2,
+          working: 3,
+          in_thread?: 1
+        ]
     end
   end
 end

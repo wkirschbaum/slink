@@ -57,6 +57,8 @@ defmodule Slink.Test.FakeWebApi do
     defp json(["apps.connections.open"]), do: %{"ok" => true, "url" => "wss://example/link"}
     defp json(["chat.postMessage"]), do: %{"ok" => true, "channel" => "C1", "ts" => "1.2"}
     defp json(["conversations.join"]), do: %{"ok" => true, "channel" => %{"id" => "C1"}}
+    defp json(["reactions.add"]), do: %{"ok" => true}
+    defp json(["reactions.remove"]), do: %{"ok" => true}
     defp json(["boom.method"]), do: %{"ok" => false, "error" => "not_authed"}
     # A malformed response missing the "ok" field entirely.
     defp json(["weird.method"]), do: %{"unexpected" => true}

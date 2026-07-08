@@ -40,6 +40,23 @@ defmodule Slink.API do
   end
 
   @doc """
+  Add an emoji reaction (`name`, no colons) to the message at `channel`/`timestamp`
+  via `reactions.add`. Needs the `reactions:write` scope.
+  """
+  @spec add_reaction(String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def add_reaction(bot_token, channel, timestamp, name) do
+    call(bot_token, "reactions.add", %{channel: channel, timestamp: timestamp, name: name})
+  end
+
+  @doc "Remove a reaction added with `add_reaction/4`, via `reactions.remove`."
+  @spec remove_reaction(String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def remove_reaction(bot_token, channel, timestamp, name) do
+    call(bot_token, "reactions.remove", %{channel: channel, timestamp: timestamp, name: name})
+  end
+
+  @doc """
   Call any Web API method. Returns `{:ok, body}` when Slack replies `ok: true`,
   otherwise `{:error, reason}` (the Slack error string, or a transport error).
   """

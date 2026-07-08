@@ -26,6 +26,11 @@ defmodule Slink.APITest do
              API.post_message("xoxb-test", "C1", "hello", %{thread_ts: "1.0"})
   end
 
+  test "add_reaction/4 and remove_reaction/4 succeed" do
+    assert {:ok, %{"ok" => true}} = API.add_reaction("xoxb-test", "C1", "1.0", "eyes")
+    assert {:ok, %{"ok" => true}} = API.remove_reaction("xoxb-test", "C1", "1.0", "eyes")
+  end
+
   test "call/3 surfaces Slack's logical error as {:error, reason}" do
     assert {:error, "not_authed"} = API.call("xoxb-test", "boom.method", %{})
   end
