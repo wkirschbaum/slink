@@ -27,6 +27,9 @@ defmodule Slink.SocketMode do
     * `:open_connection` — a 0-arity function returning `{:ok, ws_url}` used to
       obtain the WebSocket URL. Defaults to calling `apps.connections.open` with
       `:app_token`. Primarily a testing seam.
+    * `:verbose` — when `true`, log every incoming WebSocket frame at `:info`
+      (raw text for text frames). Useful for debugging what Slack actually
+      delivers. Defaults to `false`.
   """
 
   use GenServer
@@ -55,6 +58,7 @@ defmodule Slink.SocketMode do
       module: Keyword.fetch!(opts, :module),
       bot_token: Keyword.get(opts, :bot_token),
       join: Keyword.get(opts, :join, []),
+      verbose: Keyword.get(opts, :verbose, false),
       open_connection: open_connection,
       conn: nil,
       websocket: nil,
@@ -226,7 +230,18 @@ defmodule Slink.SocketMode do
 
   defp handle_response(_other, state), do: state
 
-  defp handle_frame({:text, text}, state) do
+  # Log every incoming frame when :verbose is set, then dispatch it.
+  defp handle_frame(frame, %{verbose: true} = state) do
+    log_frame(frame)
+    dispatch_frame(frame, state)
+  end
+
+  defp handle_frame(frame, state), do: dispatch_frame(frame, state)
+
+  defp log_frame({:text, text}), do: Logger.info("Slink: << text frame: #{text}")
+  defp log_frame(frame), do: Logger.info("Slink: << frame: #{inspect(frame)}")
+
+  defp dispatch_frame({:text, text}, state) do
     # A malformed frame from Slack must not take down the connection — skip it.
     case JSON.decode(text) do
       {:ok, message} ->
@@ -238,9 +253,9 @@ defmodule Slink.SocketMode do
     end
   end
 
-  defp handle_frame({:ping, data}, state), do: send_frame(state, {:pong, data})
-  defp handle_frame({:close, _code, _reason}, state), do: reconnect(state)
-  defp handle_frame(_frame, state), do: state
+  defp dispatch_frame({:ping, data}, state), do: send_frame(state, {:pong, data})
+  defp dispatch_frame({:close, _code, _reason}, state), do: reconnect(state)
+  defp dispatch_frame(_frame, state), do: state
 
   ## Slack Socket Mode protocol messages
 

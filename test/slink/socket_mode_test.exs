@@ -56,6 +56,34 @@ defmodule Slink.SocketModeTest do
     assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
   end
 
+  test "verbose: true logs every incoming frame" do
+    {:ok, url, server} = FakeSlack.start(self())
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    log =
+      capture_log(fn ->
+        start_client(url, verbose: true)
+        assert_receive {:bot_event, _event, _context}, 15_000
+      end)
+
+    assert log =~ "Slink: << text frame:"
+    # The raw JSON is logged, so the event payload is visible.
+    assert log =~ "app_mention"
+  end
+
+  test "verbose defaults to off — frames are not logged" do
+    {:ok, url, server} = FakeSlack.start(self())
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    log =
+      capture_log(fn ->
+        start_client(url)
+        assert_receive {:bot_event, _event, _context}, 15_000
+      end)
+
+    refute log =~ "Slink: << text frame:"
+  end
+
   test "joins configured channels once connected" do
     {:ok, api_url, api} = Slink.Test.FakeWebApi.start()
     Application.put_env(:slink, :api_base_url, api_url)
