@@ -47,21 +47,27 @@ Requires Elixir ~> 1.19 (built-in `JSON` module, refined compiler type warnings)
 ```elixir
 defmodule MyBot do
   use Slink
+  alias Slink.Event
 
   @impl true
-  def handle_event(%Slink.Event{type: "app_mention", payload: event}, context) do
-    send_message(context, event["channel"], "hi <@#{event["user"]}> 👋")
-    :ok
+  def handle_event(%Slink.Event{type: :app_mention} = event, context) do
+    # Reply to what triggered us — threaded if it was in a thread, else inline.
+    reply(context, "hi <@#{Event.user(event)}> 👋")
   end
 
   def handle_event(_event, _context), do: :ok
 end
 ```
 
-Handlers are **stateless**: to respond, call `send_message(context, channel, text)`
-(imported by `use Slink`). It uses the `bot_token` from the context and routes
-through a **per-channel rate limiter** so you never exceed Slack's ~1 msg/sec/
-channel limit. For other Web API calls use `Slink.API` directly.
+Handlers are **stateless**. Known Slack event types arrive as **atoms**
+(`:app_mention`, `:message`, …); unknown ones stay strings. To respond, call
+`reply(context, text, opts)` (imported by `use Slink`) — the channel and thread
+come from the event carried in the `context`, `opts[:to]` picks placement
+(`:auto`, `:thread`, `:channel`), and extra keys like `blocks:` ride along for
+rich replies. `reply/3` returns `:ok`, so a clause can end with it. You can also
+just **return** `{:reply, text}` (or `{:reply, text, opts}`) and slink sends it.
+Replies route through a **per-channel rate limiter** (Slack's ~1 msg/sec/channel).
+For other Web API calls use `Slink.API` directly.
 
 Both transports acknowledge the event to Slack *before* your handler runs and
 dispatch it off-process, so a slow handler never blows Slack's 3-second ACK

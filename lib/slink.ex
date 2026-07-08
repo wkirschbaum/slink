@@ -109,7 +109,7 @@ defmodule Slink do
   ~1/sec/channel). `opts` is merged into the request body (e.g. `blocks`,
   `thread_ts`). `use Slink` imports this, so handlers can call it unqualified:
 
-      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
+      def handle_event(%Slink.Event{type: :app_mention} = event, context) do
         send_message(context, Slink.Event.channel(event), "hi")
       end
   """
@@ -155,15 +155,26 @@ defmodule Slink do
 
   def reply(%Slink.Context{event: %Slink.Event{} = event} = context, text, opts) do
     {to, body} = Keyword.pop(opts, :to, :auto)
+    send_message(context, Slink.Event.channel(event), text, thread(body, to, event))
+  end
 
-    body =
-      if threaded?(to, event) do
-        Map.put_new(Map.new(body), :thread_ts, Slink.Event.reply_thread(event))
-      else
-        Map.new(body)
-      end
+  def reply(%Slink.Context{event: nil}, _text, _opts) do
+    raise ArgumentError,
+          "reply/3 requires context.event; call it from a handler (the dispatcher sets the event) " <>
+            "or use send_message/4 for an arbitrary channel"
+  end
 
-    send_message(context, Slink.Event.channel(event), text, body)
+  # Add thread_ts only when the placement is threaded and we actually have a
+  # timestamp to thread under — never send a nil thread_ts.
+  defp thread(body, to, event) do
+    body = Map.new(body)
+
+    with true <- threaded?(to, event),
+         ts when is_binary(ts) <- Slink.Event.reply_thread(event) do
+      Map.put_new(body, :thread_ts, ts)
+    else
+      _ -> body
+    end
   end
 
   defp threaded?(:thread, _event), do: true

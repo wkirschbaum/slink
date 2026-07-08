@@ -96,6 +96,24 @@ defmodule Slink.ReplyTest do
     test "returns :ok" do
       assert :ok = Slink.reply(context(event("C-ok")), "hi")
     end
+
+    test ":thread with no timestamp to thread under does not send a nil thread_ts" do
+      event = %Event{
+        type: :app_mention,
+        payload: %{"channel" => "C-no-ts"},
+        raw: %{},
+        transport: :socket_mode
+      }
+
+      Slink.reply(context(event), "hi", to: :thread)
+      assert_receive {:sent, %{channel: "C-no-ts", text: "hi"} = params}, 1_000
+      refute Map.has_key?(params, :thread_ts)
+    end
+
+    test "raises a clear error when the context carries no event" do
+      ctx = %Context{transport: :socket_mode, bot_token: "xoxb", event: nil}
+      assert_raise ArgumentError, ~r/requires context.event/, fn -> Slink.reply(ctx, "hi") end
+    end
   end
 
   describe "handler return values (via Dispatcher)" do
