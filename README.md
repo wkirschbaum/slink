@@ -14,13 +14,21 @@ Write your bot once; pick the transport per environment. Built on
 `JSON` module — no hand-rolled WebSocket protocol, no `Jason` dependency of our
 own.
 
-## Why not just use WebSockex / roll the protocol?
+## Why not `slack`, `slack_elixir`, or raw WebSockex?
 
-There is no official Slack SDK for Elixir (Bolt covers JS/Python/Java). But you
-don't need to reimplement the WebSocket protocol to talk to Slack — `Mint.WebSocket`
-already does that, correctly and maintained. Slink is the thin Slack-specific
-layer on top: open the connection, verify/normalise payloads, acknowledge, and
-dispatch. That's a few hundred lines you own, instead of a few thousand.
+There is no official Slack SDK for Elixir (Bolt covers JS/Python/Java), and the
+existing options each leave a gap:
+
+- **[`slack`](https://hex.pm/packages/slack)** (Elixir-Slack) is built on Slack's
+  **RTM API**, which Slack has deprecated — it no longer works for new apps or bots.
+- **[`slack_elixir`](https://hex.pm/packages/slack_elixir)** is a solid, modern
+  client but **Socket Mode only** — there's no HTTP Events API transport, which
+  Slack requires for Marketplace/distributed apps and recommends for production.
+  Slink gives you both behind one handler contract.
+- **Rolling your own on WebSockex/Mint** means reimplementing envelopes, ACKs,
+  reconnection, and signature verification yourself. You don't need to — Slink is
+  the thin Slack-specific layer on top of the maintained `Mint.WebSocket`: a few
+  hundred lines you own, not a few thousand.
 
 ## Installation
 
@@ -32,7 +40,7 @@ def deps do
 end
 ```
 
-Requires Elixir ~> 1.19 (built-in `JSON`, refined compiler type warnings).
+Requires Elixir ~> 1.19 (built-in `JSON` module, refined compiler type warnings).
 
 ## Define a bot
 

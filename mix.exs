@@ -58,12 +58,26 @@ defmodule Slink.MixProject do
 
   defp package do
     [
+      maintainers: ["Wilhelm Kirschbaum"],
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url}
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      }
     ]
   end
 
   defp docs do
-    [main: "readme", extras: ["README.md"]]
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      source_url: @source_url,
+      extras: ["README.md", "CHANGELOG.md", {:LICENSE, [title: "License"]}],
+      groups_for_modules: [
+        Transports: [Slink.SocketMode, Slink.EventsApi.Plug],
+        "Web API": [Slink.API, Slink.Rate],
+        Events: [Slink.Event, Slink.Context]
+      ]
+    ]
   end
 end

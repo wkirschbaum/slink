@@ -87,4 +87,51 @@ defmodule Slink.EventTest do
       assert Event.reply_thread(event) == "2.0"
     end
   end
+
+  describe "author and mention helpers" do
+    defp msg(payload), do: %Event{payload: payload, raw: %{}, transport: :socket_mode}
+
+    test "from_bot?/1 is true only when a bot_id is present" do
+      assert Event.from_bot?(msg(%{"bot_id" => "B1", "text" => "hi"}))
+      refute Event.from_bot?(msg(%{"user" => "U1", "text" => "hi"}))
+    end
+
+    test "text/1 and user/1 surface the payload, with a safe default for text" do
+      assert Event.text(msg(%{"text" => "hello"})) == "hello"
+      assert Event.text(msg(%{})) == ""
+      assert Event.user(msg(%{"user" => "U1"})) == "U1"
+      assert Event.user(msg(%{})) == nil
+    end
+
+    test "mention?/1 is true for app_mention events" do
+      assert Event.mention?(%Event{
+               type: "app_mention",
+               payload: %{},
+               raw: %{},
+               transport: :socket_mode
+             })
+
+      refute Event.mention?(%Event{
+               type: "message",
+               payload: %{},
+               raw: %{},
+               transport: :socket_mode
+             })
+    end
+
+    test "mentions/1 lists mentioned user ids in order; mentions?/2 checks one" do
+      event = msg(%{"text" => "<@U0BOT> ping <@U123> and <@U456>"})
+      assert Event.mentions(event) == ["U0BOT", "U123", "U456"]
+      assert Event.mentions?(event, "U123")
+      refute Event.mentions?(event, "U999")
+      assert Event.mentions(msg(%{"text" => "no mentions here"})) == []
+    end
+
+    test "text_without_mention/1 strips a leading mention and trims" do
+      assert Event.text_without_mention(msg(%{"text" => "<@U0BOT> deploy now"})) == "deploy now"
+      assert Event.text_without_mention(msg(%{"text" => "   <@U0BOT>   hi  "})) == "hi"
+      # No leading mention: returned trimmed, unchanged otherwise.
+      assert Event.text_without_mention(msg(%{"text" => "just text"})) == "just text"
+    end
+  end
 end

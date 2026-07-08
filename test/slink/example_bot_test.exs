@@ -2,7 +2,7 @@ defmodule Slink.ExampleBotTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureLog
 
-  alias Slink.Event
+  alias Slink.{Dispatcher, Event}
 
   setup do
     test_pid = self()
@@ -16,7 +16,7 @@ defmodule Slink.ExampleBotTest do
     :ok
   end
 
-  test "replies to an app_mention via send_message (rate-limited)" do
+  test "replies to an app_mention (dispatcher sends the returned reply)" do
     event = %Event{
       type: "app_mention",
       payload: %{"channel" => "C-example", "user" => "U1"},
@@ -25,12 +25,15 @@ defmodule Slink.ExampleBotTest do
     }
 
     context = %Slink.Context{transport: :socket_mode, bot_token: "xoxb-t"}
-    assert :ok = Slink.ExampleBot.handle_event(event, context)
 
-    assert_receive {:sent, "xoxb-t", "chat.postMessage", %{channel: "C-example", text: text}},
-                   1_000
-
+    # The handler just returns the reply; the dispatcher performs the send.
+    assert {:reply, text} = Slink.ExampleBot.handle_event(event, context)
     assert text =~ "hi <@U1>"
+
+    Dispatcher.dispatch(Slink.ExampleBot, event, context)
+
+    assert_receive {:sent, "xoxb-t", "chat.postMessage", %{channel: "C-example", text: ^text}},
+                   1_000
   end
 
   test "ignores and logs other event types" do

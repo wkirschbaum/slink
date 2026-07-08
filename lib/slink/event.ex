@@ -36,6 +36,57 @@ defmodule Slink.Event do
   @spec channel(t()) :: String.t() | nil
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
+  @doc "The event's text, or an empty string."
+  @spec text(t()) :: String.t()
+  def text(%__MODULE__{payload: payload}), do: payload["text"] || ""
+
+  @doc "The user who produced the event (author of the message), or `nil`."
+  @spec user(t()) :: String.t() | nil
+  def user(%__MODULE__{payload: payload}), do: payload["user"]
+
+  # A Slack user mention in message text looks like `<@U0123ABCD>`.
+  @mention_re ~r/<@([A-Z0-9]+)>/
+
+  @doc """
+  Whether the app itself was mentioned — i.e. an `app_mention` event.
+
+  This is the "someone @-mentioned the bot" signal. To see who *else* is
+  mentioned in the text, use `mentions/1`.
+  """
+  @spec mention?(t()) :: boolean()
+  def mention?(%__MODULE__{type: type}), do: type == "app_mention"
+
+  @doc """
+  User IDs mentioned in the event's text, in order (e.g. `["U0123", "U0456"]`).
+
+  Empty when nobody is mentioned.
+  """
+  @spec mentions(t()) :: [String.t()]
+  def mentions(%__MODULE__{} = event) do
+    @mention_re
+    |> Regex.scan(text(event), capture: :all_but_first)
+    |> List.flatten()
+  end
+
+  @doc "Whether `user_id` is mentioned in the event's text."
+  @spec mentions?(t(), String.t()) :: boolean()
+  def mentions?(%__MODULE__{} = event, user_id), do: user_id in mentions(event)
+
+  @doc """
+  The event's text with a leading `<@…>` mention stripped and trimmed.
+
+  Handy for `app_mention` events, where the text starts with the bot mention —
+  this returns just the part addressed to the bot ("`@bot deploy now`" →
+  "`deploy now`").
+  """
+  @spec text_without_mention(t()) :: String.t()
+  def text_without_mention(%__MODULE__{} = event) do
+    event
+    |> text()
+    |> String.replace(~r/^\s*<@[^>]+>\s*/, "")
+    |> String.trim()
+  end
+
   @doc "The event's own message timestamp (`ts`), or `nil`."
   @spec ts(t()) :: String.t() | nil
   def ts(%__MODULE__{payload: payload}), do: payload["ts"]
@@ -51,6 +102,15 @@ defmodule Slink.Event do
   @doc "Whether this event happened inside a thread."
   @spec in_thread?(t()) :: boolean()
   def in_thread?(%__MODULE__{} = event), do: is_binary(thread_ts(event))
+
+  @doc """
+  Whether this event was produced by a bot (including this app itself).
+
+  Slack tags bot-authored messages with a `bot_id`. Handlers use this to skip
+  the bot's own posts so an auto-reply never triggers itself in a loop.
+  """
+  @spec from_bot?(t()) :: boolean()
+  def from_bot?(%__MODULE__{payload: payload}), do: is_binary(payload["bot_id"])
 
   @doc """
   The `thread_ts` to reply into so a reply lands in this event's thread.

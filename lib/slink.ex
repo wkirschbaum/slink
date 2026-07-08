@@ -19,15 +19,22 @@ defmodule Slink do
 
       defmodule MyBot do
         use Slink
-        alias Slink.API
+        alias Slink.Event
 
         @impl true
-        def handle_event(%Slink.Event{type: "app_mention", payload: e}, context) do
-          API.post_message(context.bot_token, e["channel"], "hi <@\#{e["user"]}> 👋")
-          :ok
+        def handle_event(%Slink.Event{type: "app_mention"} = event, _context) do
+          # Return a reply and slink sends it (placement: to: :auto by default).
+          {:reply, "hi <@\#{Event.user(event)}> 👋"}
         end
 
         def handle_event(_event, _context), do: :ok
+      end
+
+  Or reply imperatively — `reply/4` returns `:ok`, so it can be the last
+  expression, and `to:` picks where it lands (`:auto`, `:thread`, `:channel`):
+
+      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
+        reply(context, event, Event.text_without_mention(event), to: :channel)
       end
 
   ## Running it (Socket Mode)
@@ -69,13 +76,32 @@ defmodule Slink do
     !!(config[:enabled] && config[:app_token] && config[:bot_token])
   end
 
+  @typedoc """
+  What a handler returns:
+
+    * `:ok` — done, no reply.
+    * `{:reply, text}` — slink replies with `text` via `reply/4` with the
+      default `to: :auto` placement (threaded if the event is in a thread,
+      otherwise inline). Saves the handler from threading `context` around and
+      calling `reply/4` itself.
+    * `{:reply, text, opts}` — same, passing `opts` to `reply/4`: `to: :thread`
+      / `to: :channel` to force placement, and `blocks: [...]` /
+      `attachments: [...]` for **rich replies**. `text` is still sent as the
+      notification/fallback Slack shows in previews, so always provide something
+      meaningful.
+
+  Any other value is treated as `:ok` (no reply).
+  """
+  @type result :: :ok | {:reply, String.t()} | {:reply, String.t(), keyword()}
+
   @doc """
   Invoked for every event Slack delivers, from either transport.
 
-  Return `:ok`. The transport has already acknowledged the event to Slack
-  before this runs, so slow work here never risks Slack's 3-second ACK window.
+  Return `:ok` to do nothing, or `{:reply, text}` to reply (see `t:result/0`).
+  The transport has already acknowledged the event to Slack before this runs,
+  so slow work here never risks Slack's 3-second ACK window.
   """
-  @callback handle_event(Slink.Event.t(), context()) :: :ok
+  @callback handle_event(Slink.Event.t(), context()) :: result()
 
   @doc """
   Post a message to `channel`, using the bot token from the handler `context`.
@@ -96,72 +122,59 @@ defmodule Slink do
   @doc """
   Whether `event` happened inside a thread (imported by `use Slink`).
 
-  Makes the incoming case obvious at a glance, so a handler can pick where to
-  answer:
-
-      if in_thread?(event) do
-        reply(context, event, "in the thread")        # threaded
-      else
-        reply_in_channel(context, event, "in channel") # inline
-      end
-
   Delegates to `Slink.Event.in_thread?/1`.
   """
   @spec in_thread?(Slink.Event.t()) :: boolean()
   defdelegate in_thread?(event), to: Slink.Event
 
   @doc """
-  Reply to an `event` **in a thread** (imported by `use Slink`).
-
-  Posts to the event's channel with `thread_ts` set to the event's thread — or,
-  if the event isn't in a thread yet, to the event's own message, *starting* a
-  thread on it. So the reply always stays threaded with what triggered it:
+  Reply to an `event` (imported by `use Slink`). Returns `:ok`, so a handler can
+  end with it — no trailing `:ok` needed:
 
       def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
         reply(context, event, "on it 👍")
       end
 
-  `opts` is merged into the request body. To answer **inline** in the channel
-  instead, use `reply_in_channel/4`.
+  Where the reply lands is controlled by `opts[:to]`:
+
+    * `:auto` (default) — **dynamic**: in the thread if the event is in one,
+      otherwise inline in the channel.
+    * `:thread` — always in a thread: the event's existing thread, or a new one
+      started on the triggering message.
+    * `:channel` — always inline in the channel timeline, even if the event was
+      inside a thread.
+
+  Every other key in `opts` is merged into the Slack request body, for **rich
+  replies**: `blocks: [...]` (Block Kit), `attachments: [...]`, an explicit
+  `thread_ts:`, etc.
+
+      reply(context, event, "deployed ✅", to: :channel, blocks: blocks)
   """
-  @spec reply(context(), Slink.Event.t(), String.t(), map()) :: :ok
-  def reply(%Slink.Context{} = context, %Slink.Event{} = event, text, opts \\ %{}) do
-    opts = Map.put_new(opts, :thread_ts, Slink.Event.reply_thread(event))
-    send_message(context, Slink.Event.channel(event), text, opts)
-  end
+  @spec reply(context(), Slink.Event.t(), String.t(), keyword()) :: :ok
+  def reply(context, event, text, opts \\ [])
 
-  @doc """
-  Reply to an `event` **inline** in its channel, not threaded (imported by
-  `use Slink`).
+  def reply(%Slink.Context{} = context, %Slink.Event{} = event, text, opts) do
+    {to, body} = Keyword.pop(opts, :to, :auto)
 
-  Posts to the event's channel with no `thread_ts`, so the message lands in the
-  main channel timeline. The counterpart to `reply/4`, which threads:
-
-      def handle_event(%Slink.Event{type: "app_mention"} = event, context) do
-        reply_in_channel(context, event, "hi 👋")
+    body =
+      if threaded?(to, event) do
+        Map.put_new(Map.new(body), :thread_ts, Slink.Event.reply_thread(event))
+      else
+        Map.new(body)
       end
 
-  `opts` is merged into the request body.
-  """
-  @spec reply_in_channel(context(), Slink.Event.t(), String.t(), map()) :: :ok
-  def reply_in_channel(%Slink.Context{} = context, %Slink.Event{} = event, text, opts \\ %{}) do
-    send_message(context, Slink.Event.channel(event), text, opts)
+    send_message(context, Slink.Event.channel(event), text, body)
   end
+
+  defp threaded?(:thread, _event), do: true
+  defp threaded?(:channel, _event), do: false
+  defp threaded?(:auto, event), do: in_thread?(event)
 
   defmacro __using__(_opts) do
     quote do
       @behaviour Slink
 
-      import Slink,
-        only: [
-          send_message: 3,
-          send_message: 4,
-          reply: 3,
-          reply: 4,
-          reply_in_channel: 3,
-          reply_in_channel: 4,
-          in_thread?: 1
-        ]
+      import Slink, only: [send_message: 3, send_message: 4, reply: 3, reply: 4, in_thread?: 1]
     end
   end
 end

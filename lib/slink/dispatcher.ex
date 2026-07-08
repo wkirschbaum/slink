@@ -33,8 +33,7 @@ defmodule Slink.Dispatcher do
     # (`module: MyBot`), so nothing forces it to load before the first event
     # arrives under lazy code loading. Ensure it's loaded before we check.
     if Code.ensure_loaded?(module) and function_exported?(module, :handle_event, 2) do
-      _ = module.handle_event(event, context)
-      :ok
+      module.handle_event(event, context) |> reply(event, context)
     else
       Logger.warning(
         "#{inspect(module)} does not implement handle_event/2; ignoring #{event.type}"
@@ -43,4 +42,10 @@ defmodule Slink.Dispatcher do
       :ok
     end
   end
+
+  # Perform a reply if the handler asked for one via its return value; otherwise
+  # do nothing. See `t:Slink.result/0`.
+  defp reply({:reply, text}, event, context), do: Slink.reply(context, event, text)
+  defp reply({:reply, text, opts}, event, context), do: Slink.reply(context, event, text, opts)
+  defp reply(_other, _event, _context), do: :ok
 end
