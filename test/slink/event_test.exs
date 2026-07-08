@@ -127,6 +127,12 @@ defmodule Slink.EventTest do
       assert Event.mentions(msg(%{"text" => "no mentions here"})) == []
     end
 
+    test "mentions/1 also handles the labeled <@ID|name> form" do
+      event = msg(%{"text" => "<@U0123|alice> and <@U456>"})
+      assert Event.mentions(event) == ["U0123", "U456"]
+      assert Event.mentions?(event, "U0123")
+    end
+
     test "command/1 strips a leading mention and trims" do
       assert Event.command(msg(%{"text" => "<@U0BOT> deploy now"})) == "deploy now"
       assert Event.command(msg(%{"text" => "   <@U0BOT>   hi  "})) == "hi"

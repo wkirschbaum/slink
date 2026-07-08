@@ -65,8 +65,9 @@ defmodule Slink.Event do
   @spec user(t()) :: String.t() | nil
   def user(%__MODULE__{payload: payload}), do: payload["user"]
 
-  # A Slack user mention in message text looks like `<@U0123ABCD>`.
-  @mention_re ~r/<@([A-Z0-9]+)>/
+  # A Slack user mention in message text looks like `<@U0123ABCD>`, and sometimes
+  # carries a label: `<@U0123ABCD|alice>`. Capture the id either way.
+  @mention_re ~r/<@([A-Z0-9]+)(?:\|[^>]*)?>/
 
   @doc """
   Whether the app itself was mentioned — i.e. an `app_mention` event.
