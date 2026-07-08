@@ -65,6 +65,10 @@ defmodule Slink.SocketMode do
       request_ref: nil,
       status: nil,
       resp_headers: nil,
+      # WebSocket frame bytes that arrive in the same batch as the upgrade
+      # response, before {:done} creates the websocket. Buffered here, then
+      # decoded the moment the websocket exists. See handle_response/2.
+      pending: "",
       # consecutive-failure counter driving reconnect backoff; reset on connect.
       backoff: 0
     }
@@ -170,6 +174,7 @@ defmodule Slink.SocketMode do
         request_ref: nil,
         status: nil,
         resp_headers: nil,
+        pending: "",
         backoff: state.backoff + 1
     }
   end
@@ -209,7 +214,10 @@ defmodule Slink.SocketMode do
         })
 
         # Connected cleanly — reset the backoff so the next blip retries fast.
-        %{state | conn: conn, websocket: websocket, backoff: 0}
+        # Then flush any frame bytes that arrived before this {:done} (see the
+        # websocket: nil clause of handle_response/2 below).
+        state = %{state | conn: conn, websocket: websocket, backoff: 0}
+        flush_pending(state)
 
       {:error, conn, reason} ->
         Logger.error("Slink: WebSocket handshake failed (#{inspect(reason)})")
@@ -218,7 +226,30 @@ defmodule Slink.SocketMode do
   end
 
   defp handle_response({:data, _ref, data}, %{websocket: ws} = state) when ws != nil do
-    case Mint.WebSocket.decode(ws, data) do
+    decode_frames(state, data)
+  end
+
+  # Frames can arrive in the *same* response batch as the upgrade, ordered
+  # before the {:done} that creates the websocket. Mint emits
+  # `[:status, :headers, :data, :done]` whenever the server pushes WebSocket
+  # frames in the same TCP segment as its 101 response — which Slack does (it
+  # sends `hello`, and often the first envelope, immediately on connect). At
+  # that point `websocket` is still nil, so we must buffer the bytes rather than
+  # drop them; `flush_pending/1` decodes them once {:done} builds the websocket.
+  defp handle_response({:data, _ref, data}, %{websocket: nil} = state) do
+    %{state | pending: state.pending <> data}
+  end
+
+  defp handle_response(_other, state), do: state
+
+  defp flush_pending(%{pending: ""} = state), do: state
+
+  defp flush_pending(%{pending: data} = state) do
+    decode_frames(%{state | pending: ""}, data)
+  end
+
+  defp decode_frames(state, data) do
+    case Mint.WebSocket.decode(state.websocket, data) do
       {:ok, websocket, frames} ->
         Enum.reduce(frames, %{state | websocket: websocket}, &handle_frame/2)
 
@@ -227,8 +258,6 @@ defmodule Slink.SocketMode do
         %{state | websocket: websocket}
     end
   end
-
-  defp handle_response(_other, state), do: state
 
   # Log every incoming frame when :verbose is set, then dispatch it.
   defp handle_frame(frame, %{verbose: true} = state) do
