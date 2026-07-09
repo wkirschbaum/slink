@@ -4,17 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-07-09
+## [0.3.2] - 2026-07-09
 
-### Changed
+### Documentation
 
-- **`open_modal/2` now returns `:ok | {:error, reason}`** instead of the raw
-  `{:ok, response}` from `views.open`. This matches the `:ok | {:error, reason}`
-  shape the standard library uses for a side effect that can fail — and pairs
-  with `reply/3`'s `:ok` — so a handler ends with `open_modal(context, view)`
-  cleanly, no trailing `:ok`. When you need the opened view's id (to
-  `update_view/3` / `push_view/3` later), call `Slink.API.open_view/3` directly;
-  it still returns the full `{:ok, response}`.
+- **Clarified the `handle_event/2` return contract.** A handler returns `:ok`
+  (or anything that isn't `{:reply, …}` / `{:ack, …}`) when there's nothing to
+  reply — no ceremony. `open_modal/2` keeps returning `{:ok, response} |
+  {:error, reason}` (the standard shape for a call that returns data and can
+  fail; `response["view"]["id"]` is what you pass to `update_view/3` /
+  `push_view/3`), and a handler can simply end with it — the dispatcher treats
+  its non-`{:reply, …}` return as "no reply", so no trailing `:ok` is needed.
+  The docs previously implied one was required.
+- **README** now shows replying with a button (Block Kit `blocks` on a reply)
+  and handling the click.
 
 ## [0.3.1] - 2026-07-09
 
@@ -196,7 +199,7 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
-[0.4.0]: https://github.com/wkirschbaum/slink/compare/v0.3.1...v0.4.0
+[0.3.2]: https://github.com/wkirschbaum/slink/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/wkirschbaum/slink/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/wkirschbaum/slink/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/wkirschbaum/slink/compare/v0.2.1...v0.2.2

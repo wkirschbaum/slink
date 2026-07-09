@@ -224,26 +224,22 @@ defmodule Slink do
   Open a modal in response to the interaction or slash command in `context`
   (imported by `use Slink`).
 
-  Returns `:ok` on success, or `{:error, reason}` if the open fails — the same
-  `:ok | {:error, reason}` shape the standard library uses for a side effect
-  that can fail. `:ok` is a valid `t:result/0`, so a handler can end with it like
-  `reply/3`; a failed open still doesn't break the handler (the dispatcher
-  ignores a non-`{:reply, …}` return), but you can match on it if you care.
+  Returns `{:ok, response} | {:error, reason}` — the standard shape for a call
+  that returns data and can fail. `response` is Slack's `views.open` payload, so
+  `response["view"]["id"]` is the id you pass to `update_view/3` / `push_view/3`
+  later. You can also just end a handler with it: the dispatcher treats a
+  non-`{:reply, …}`/`{:ack, …}` return as "no reply" (see `t:result/0`), so a
+  bare `open_modal(context, view)` is fine and no trailing `:ok` is needed.
 
   Uses the event's `trigger_id`, which Slack honours for only ~3 seconds, so open
-  promptly. `view` is a Block Kit view map. When you need the opened view's id
-  (e.g. to `update_view/3` / `push_view/3` it later), call `Slink.API.open_view/3`
-  directly — it returns the full `{:ok, response}`.
+  promptly. `view` is a Block Kit view map.
 
       def handle_event(%Slink.Event{type: :shortcut} = _event, context) do
         open_modal(context, my_view())
       end
   """
   def open_modal(%Slink.Context{bot_token: token, event: %Slink.Event{} = event}, view) do
-    case Slink.API.open_view(token, Slink.Event.trigger_id(event), view) do
-      {:ok, _response} -> :ok
-      {:error, _reason} = error -> error
-    end
+    Slink.API.open_view(token, Slink.Event.trigger_id(event), view)
   end
 
   @working_emoji "hourglass_flowing_sand"
