@@ -21,6 +21,16 @@ defmodule Slink.SocketModeTest do
     def handle_event(_event, _context), do: raise("handler boom")
   end
 
+  defmodule AckBot do
+    use Slink
+
+    @impl true
+    def handle_event(%Slink.Event{type: :view_submission}, _context),
+      do: {:ack, %{response_action: "errors", errors: %{"block" => "nope"}}}
+
+    def handle_event(_event, _context), do: :ok
+  end
+
   setup do
     Process.register(self(), :socket_mode_sink)
     :ok
@@ -57,6 +67,30 @@ defmodule Slink.SocketModeTest do
 
     assert_receive {:fake_slack, :frame, ack}, 15_000
     assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
+  end
+
+  test "a view_submission is ACKed with the handler's response_action payload" do
+    frames = [
+      {:text, JSON.encode!(%{"type" => "hello"})},
+      {:text,
+       JSON.encode!(%{
+         "type" => "interactive",
+         "envelope_id" => "vs-1",
+         "payload" => %{"type" => "view_submission", "view" => %{"callback_id" => "m"}}
+       })}
+    ]
+
+    {:ok, url, server} = FakeSlack.start(self(), frames: frames)
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    start_client(url, module: AckBot)
+
+    assert_receive {:fake_slack, :frame, ack}, 15_000
+
+    assert JSON.decode!(ack) == %{
+             "envelope_id" => "vs-1",
+             "payload" => %{"response_action" => "errors", "errors" => %{"block" => "nope"}}
+           }
   end
 
   test "verbose: true logs every incoming frame" do

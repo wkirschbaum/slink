@@ -87,10 +87,16 @@ defmodule Slink do
       `attachments: [...]` for **rich replies**. `text` is still sent as the
       notification/fallback Slack shows in previews, so always provide something
       meaningful.
+    * `{:ack, map}` — only for a `view_submission` (modal submit): `map` is
+      Slack's `response_action` reply, e.g.
+      `%{response_action: "errors", errors: %{"block" => "…"}}` to show
+      validation errors, or `update`/`push` to swap the modal. This event type
+      runs synchronously, so return promptly. Any other return closes the modal.
 
   Any other value is treated as `:ok` (no reply).
   """
-  @type result :: :ok | {:reply, String.t()} | {:reply, String.t(), keyword()}
+  @type result ::
+          :ok | {:reply, String.t()} | {:reply, String.t(), keyword()} | {:ack, map()}
 
   @doc """
   Invoked for every event Slack delivers, from either transport.
@@ -148,12 +154,44 @@ defmodule Slink do
   `thread_ts:`, etc.
 
       reply(context, "deployed ✅", to: :channel, blocks: blocks)
+
+  For a **slash command** the reply goes to the command's `response_url` instead,
+  with `to: :ephemeral` (default, only the invoker) or `to: :channel`.
   """
   def reply(context, text, opts \\ [])
 
+  def reply(
+        %Slink.Context{event: %Slink.Event{kind: :slash_commands} = event} = context,
+        text,
+        opts
+      ) do
+    # Slash commands reply through their response_url; `to:` picks visibility —
+    # `:ephemeral` (default, only the invoker) or `:channel`. On the off chance
+    # there's no response_url, fall back to a plain channel post.
+    case Slink.Event.response_url(event) do
+      url when is_binary(url) ->
+        {to, body} = Keyword.pop(opts, :to, :ephemeral)
+        params = body |> Map.new() |> Map.merge(%{text: text, response_type: slash_type(to)})
+        _ = Slink.API.respond(url, params)
+        :ok
+
+      _ ->
+        {_to, body} = Keyword.pop(opts, :to)
+        send_message(context, Slink.Event.channel(event), text, Map.new(body))
+    end
+  end
+
   def reply(%Slink.Context{event: %Slink.Event{} = event} = context, text, opts) do
-    {to, body} = Keyword.pop(opts, :to, :auto)
-    send_message(context, Slink.Event.channel(event), text, thread(body, to, event))
+    case Slink.Event.channel(event) do
+      channel when is_binary(channel) ->
+        {to, body} = Keyword.pop(opts, :to, :auto)
+        send_message(context, channel, text, thread(body, to, event))
+
+      _ ->
+        raise ArgumentError,
+              "reply/3 has no channel for a #{inspect(event.type)} event; return " <>
+                "{:ack, map} from a view_submission, or post via Slink.API directly"
+    end
   end
 
   def reply(%Slink.Context{event: nil}, _text, _opts) do
@@ -178,6 +216,26 @@ defmodule Slink do
   defp threaded?(:thread, _event), do: true
   defp threaded?(:channel, _event), do: false
   defp threaded?(:auto, event), do: in_thread?(event)
+
+  defp slash_type(:channel), do: "in_channel"
+  defp slash_type(_ephemeral), do: "ephemeral"
+
+  @doc """
+  Open a modal in response to the interaction or slash command in `context`
+  (imported by `use Slink`).
+
+  Uses the event's `trigger_id`, which Slack honours for only ~3 seconds, so open
+  promptly. `view` is a Block Kit view map. Returns `Slink.API.open_view/3`'s
+  result. For follow-ups use `Slink.API.update_view/3` and `Slink.API.push_view/3`.
+
+      def handle_event(%Slink.Event{type: :shortcut} = _event, context) do
+        open_modal(context, my_view())
+        :ok
+      end
+  """
+  def open_modal(%Slink.Context{bot_token: token, event: %Slink.Event{} = event}, view) do
+    Slink.API.open_view(token, Slink.Event.trigger_id(event), view)
+  end
 
   @working_emoji "hourglass_flowing_sand"
   @working_delay_ms 3_000
@@ -262,6 +320,7 @@ defmodule Slink do
           reply: 3,
           working: 2,
           working: 3,
+          open_modal: 2,
           in_thread?: 1
         ]
     end

@@ -31,10 +31,18 @@ defmodule Slink.EventsApi.Plug do
     * `:signing_secret` (required) — the app's Signing Secret, for request verification.
     * `:bot_token` — bot token (`xoxb-…`) passed to handlers for Web API calls.
 
-  > #### Slash commands & interactivity {: .info}
-  > Those payloads arrive `application/x-www-form-urlencoded`, not JSON. This
-  > plug handles the JSON Events API. Decode `x-www-form-urlencoded` bodies
-  > (the `payload` field holds JSON) before reaching here to support them.
+  ## Slash commands & interactivity
+
+  Slack delivers those as `application/x-www-form-urlencoded`, not JSON; this
+  plug decodes both. Point the app's **Request URL** for *Interactivity* and
+  *Slash Commands* at this same endpoint. Slash commands and most interactions
+  are handled off-process like events, and your handler replies via the
+  `response_url` (see `Slink.reply/3`).
+
+  The one exception is `view_submission` (a modal submit): Slack expects a
+  `response_action` in the immediate reply. For that type the handler runs
+  synchronously and its `{:ack, map}` return is sent back as the response — so
+  keep it fast (Slack's window is ~3s). Returning anything else closes the modal.
   """
 
   @behaviour Plug
@@ -74,7 +82,16 @@ defmodule Slink.EventsApi.Plug do
     end
   end
 
+  # Slash commands and interactions arrive form-encoded; events arrive as JSON.
   defp respond(conn, body, opts) do
+    if form?(conn) do
+      handle(conn, decode_form(body), opts, &Event.from_http_form/1)
+    else
+      respond_json(conn, body, opts)
+    end
+  end
+
+  defp respond_json(conn, body, opts) do
     case JSON.decode(body) do
       {:ok, %{"type" => "url_verification", "challenge" => challenge}} ->
         conn
@@ -83,16 +100,61 @@ defmodule Slink.EventsApi.Plug do
         |> halt()
 
       {:ok, params} ->
-        event = Event.from_http(params)
-        context = %Slink.Context{transport: :http, bot_token: opts.bot_token}
-        Dispatcher.async(opts.module, event, context)
-
-        conn |> send_resp(200, "") |> halt()
+        handle(conn, with_retry(conn, params), opts, &Event.from_http/1)
 
       {:error, _reason} ->
         conn |> send_resp(400, "bad request") |> halt()
     end
   end
+
+  # One path for every payload: build the event, then either fold a synchronous
+  # response into the reply (view_submission) or ACK now and dispatch off-process.
+  defp handle(conn, params, opts, normalize) do
+    event = normalize.(params)
+    context = %Slink.Context{transport: :http, bot_token: opts.bot_token}
+
+    if Dispatcher.sync_ack?(event) do
+      ack_response(conn, Dispatcher.ack_result(opts.module, event, context))
+    else
+      Dispatcher.async(opts.module, event, context)
+      conn |> send_resp(200, "") |> halt()
+    end
+  end
+
+  # An empty ACK closes the modal; a payload (e.g. `response_action: "errors"`)
+  # controls it. Slack reads a JSON body here, so set the content type.
+  defp ack_response(conn, payload) when map_size(payload) == 0 do
+    conn |> send_resp(200, "") |> halt()
+  end
+
+  defp ack_response(conn, payload) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, JSON.encode!(payload))
+    |> halt()
+  end
+
+  defp form?(conn) do
+    case get_req_header(conn, "content-type") do
+      [ct | _] -> String.contains?(ct, "application/x-www-form-urlencoded")
+      _ -> false
+    end
+  end
+
+  defp decode_form(body), do: URI.decode_query(body)
+
+  # Surface Slack's retry counter (a header) in the body so `Event.retry?/1`
+  # works over HTTP the way it does for Socket Mode's envelope field.
+  defp with_retry(conn, params) when is_map(params) do
+    with [n | _] <- get_req_header(conn, "x-slack-retry-num"),
+         {num, _} <- Integer.parse(n) do
+      Map.put(params, "retry_num", num)
+    else
+      _ -> params
+    end
+  end
+
+  defp with_retry(_conn, params), do: params
 
   defp verified?(conn, body, secret) do
     with [timestamp] <- get_req_header(conn, "x-slack-request-timestamp"),

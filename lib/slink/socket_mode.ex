@@ -300,10 +300,19 @@ defmodule Slink.SocketMode do
   end
 
   defp handle_message(%{"envelope_id" => id} = message, state) when is_binary(id) do
-    # ACK first (within Slack's 3s window), then dispatch off-process.
-    state = ack(state, id)
-    dispatch(state, message)
-    state
+    event = Event.from_socket_mode(message)
+    context = %Context{transport: :socket_mode, bot_token: state.bot_token}
+
+    if Dispatcher.sync_ack?(event) do
+      # A modal submit: Slack wants the response in the ACK, so run the handler
+      # now (bounded and isolated by ack_result/3) and ACK with its payload.
+      ack(state, id, Dispatcher.ack_result(state.module, event, context))
+    else
+      # ACK first (within Slack's 3s window), then dispatch off-process.
+      state = ack(state, id)
+      Dispatcher.async(state.module, event, context)
+      state
+    end
   end
 
   defp handle_message(_message, state), do: state
@@ -321,14 +330,14 @@ defmodule Slink.SocketMode do
     end)
   end
 
-  defp ack(state, envelope_id) do
+  defp ack(state, envelope_id, payload \\ %{})
+
+  defp ack(state, envelope_id, payload) when map_size(payload) == 0 do
     send_frame(state, {:text, encode(%{envelope_id: envelope_id})})
   end
 
-  defp dispatch(state, message) do
-    event = Event.from_socket_mode(message)
-    context = %Context{transport: :socket_mode, bot_token: state.bot_token}
-    Dispatcher.async(state.module, event, context)
+  defp ack(state, envelope_id, payload) do
+    send_frame(state, {:text, encode(%{envelope_id: envelope_id, payload: payload})})
   end
 
   ## Sending

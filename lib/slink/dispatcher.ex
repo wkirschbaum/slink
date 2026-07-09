@@ -2,38 +2,97 @@ defmodule Slink.Dispatcher do
   @moduledoc false
   require Logger
 
+  alias Slink.Event
+
+  @default_ack_timeout_ms 2_500
+
   @doc """
   Dispatch `event` to `module` off-process, under `Slink.TaskSupervisor`.
 
   This is the single path both transports use after they've acknowledged the
   event to Slack. Crash containment is the task's job — a handler that raises
   kills only its own (temporary) task; the transport keeps running.
+
+  A delivery Slack is retrying (same `event_id`) is dropped here, so a handler
+  never fires twice for one event — see `Slink.Dedup`.
   """
-  def async(module, %Slink.Event{} = event, %Slink.Context{} = context) do
+  def async(module, %Event{} = event, %Slink.Context{} = context) do
+    emit_received(module, event, context)
+
+    if duplicate?(event) do
+      Logger.debug("Slink: dropping duplicate delivery of #{Event.event_id(event)}")
+    else
+      Task.Supervisor.start_child(Slink.TaskSupervisor, fn ->
+        dispatch(module, event, context)
+      end)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Whether `event` needs a *synchronous* response folded into the transport's ACK.
+
+  Only `view_submission` does: Slack expects a `response_action` (close, errors,
+  update, push) in the immediate reply to control the modal. Everything else is
+  acknowledged first and handled off-process.
+  """
+  def sync_ack?(%Event{kind: :interactive, type: :view_submission}), do: true
+  def sync_ack?(_event), do: false
+
+  @doc """
+  Run `module`'s handler for a `sync_ack?/1` event and return the ACK payload map.
+
+  The handler runs in an isolated, time-bounded task so a crash or a slow
+  handler can't take down the transport (or blow Slack's ~3s window): it returns
+  `%{}` — which closes the modal — on crash or timeout. A handler opts into a
+  non-empty response by returning `{:ack, map}` (e.g.
+  `{:ack, %{response_action: "errors", errors: %{...}}}`).
+  """
+  def ack_result(module, %Event{} = event, %Slink.Context{} = context) do
+    emit_received(module, event, context)
+
+    task =
+      Task.Supervisor.async_nolink(Slink.TaskSupervisor, fn -> run(module, event, context) end)
+
+    case Task.yield(task, ack_timeout()) || Task.shutdown(task, :brutal_kill) do
+      {:ok, payload} when is_map(payload) -> payload
+      _ -> %{}
+    end
+  end
+
+  defp emit_received(module, %Event{} = event, %Slink.Context{} = context) do
     :telemetry.execute(
       [:slink, :event, :received],
       %{system_time: System.system_time()},
       %{type: event.type, transport: context.transport, module: module}
     )
-
-    Task.Supervisor.start_child(Slink.TaskSupervisor, fn ->
-      dispatch(module, event, context)
-    end)
-
-    :ok
   end
 
-  # Runs the user's handler. Called from inside a task (see async/3), so there is
-  # no rescue here: OTP logs and isolates a crashing handler.
-  def dispatch(module, %Slink.Event{} = event, %Slink.Context{} = context) do
-    # `function_exported?/3` returns false for a module that hasn't been loaded
-    # yet, and the handler is typically only referenced as a bare atom in config
-    # (`module: MyBot`), so nothing forces it to load before the first event
-    # arrives under lazy code loading. Ensure it's loaded before we check.
+  # Runs the user's handler and performs any reply it asks for. Called from
+  # inside a task (see async/3), so there is no rescue here: OTP logs and
+  # isolates a crashing handler.
+  def dispatch(module, %Event{} = event, %Slink.Context{} = context) do
+    context = %{context | event: event}
+    invoke(module, event, context) |> reply(context)
+  end
+
+  # Like dispatch/3 but returns the handler's `{:ack, map}` payload (else `%{}`)
+  # for a transport to fold into its ACK, rather than performing a reply.
+  defp run(module, %Event{} = event, %Slink.Context{} = context) do
+    case invoke(module, event, %{context | event: event}) do
+      {:ack, payload} when is_map(payload) -> payload
+      _ -> %{}
+    end
+  end
+
+  # Load the handler and call it. `function_exported?/3` reports false for a
+  # module that hasn't been loaded yet, and the handler is typically referenced
+  # only as a bare atom in config (`module: MyBot`), so nothing forces it to load
+  # before the first event under lazy code loading — hence `ensure_loaded?`.
+  defp invoke(module, %Event{} = event, context) do
     if Code.ensure_loaded?(module) and function_exported?(module, :handle_event, 2) do
-      # Embed the event in the context so handlers (and reply/3) need only it.
-      context = %{context | event: event}
-      module.handle_event(event, context) |> reply(context)
+      module.handle_event(event, context)
     else
       Logger.warning(
         "#{inspect(module)} does not implement handle_event/2; ignoring #{event.type}"
@@ -42,6 +101,15 @@ defmodule Slink.Dispatcher do
       :ok
     end
   end
+
+  defp duplicate?(%Event{} = event) do
+    case Event.event_id(event) do
+      id when is_binary(id) -> Slink.Dedup.seen?(id)
+      _ -> false
+    end
+  end
+
+  defp ack_timeout, do: Application.get_env(:slink, :ack_timeout_ms, @default_ack_timeout_ms)
 
   # Perform a reply if the handler asked for one via its return value; otherwise
   # do nothing. See `t:Slink.result/0`.

@@ -34,11 +34,22 @@ defmodule Slink.Test.FakeWebApi do
     def call(conn, _opts) do
       {:ok, raw, conn} = read_body(conn)
       report(conn.path_info, raw)
-      body = json(conn.path_info)
+      respond(conn, conn.path_info)
+    end
 
+    # One method always rate-limits (HTTP 429 + Retry-After) so tests can prove
+    # `Slink.API.call/3` backs off and retries on 429.
+    defp respond(conn, ["rate.limited"]) do
+      conn
+      |> put_resp_header("retry-after", "0")
+      |> put_resp_content_type("application/json")
+      |> send_resp(429, JSON.encode!(%{"error" => "ratelimited"}))
+    end
+
+    defp respond(conn, path) do
       conn
       |> put_resp_content_type("application/json")
-      |> send_resp(200, JSON.encode!(body))
+      |> send_resp(200, JSON.encode!(json(path)))
     end
 
     # Optional observability: if a test registered a sink pid, forward requests.
@@ -56,9 +67,20 @@ defmodule Slink.Test.FakeWebApi do
     # Slack always returns HTTP 200; success/failure lives in the "ok" field.
     defp json(["apps.connections.open"]), do: %{"ok" => true, "url" => "wss://example/link"}
     defp json(["chat.postMessage"]), do: %{"ok" => true, "channel" => "C1", "ts" => "1.2"}
+    defp json(["chat.update"]), do: %{"ok" => true, "channel" => "C1", "ts" => "1.2"}
+    defp json(["chat.delete"]), do: %{"ok" => true, "channel" => "C1", "ts" => "1.2"}
+    defp json(["chat.postEphemeral"]), do: %{"ok" => true, "message_ts" => "1.2"}
+    defp json(["chat.getPermalink"]), do: %{"ok" => true, "permalink" => "https://slack/p1"}
     defp json(["conversations.join"]), do: %{"ok" => true, "channel" => %{"id" => "C1"}}
+    defp json(["users.info"]), do: %{"ok" => true, "user" => %{"id" => "U1", "name" => "alice"}}
     defp json(["reactions.add"]), do: %{"ok" => true}
     defp json(["reactions.remove"]), do: %{"ok" => true}
+    defp json(["views.open"]), do: %{"ok" => true, "view" => %{"id" => "V1"}}
+    defp json(["views.update"]), do: %{"ok" => true, "view" => %{"id" => "V1"}}
+    defp json(["views.push"]), do: %{"ok" => true, "view" => %{"id" => "V2"}}
+    defp json(["views.publish"]), do: %{"ok" => true}
+    # A slash command / interaction `response_url` post lands here.
+    defp json(["response"]), do: %{"ok" => true}
     defp json(["boom.method"]), do: %{"ok" => false, "error" => "not_authed"}
     # A malformed response missing the "ok" field entirely.
     defp json(["weird.method"]), do: %{"unexpected" => true}

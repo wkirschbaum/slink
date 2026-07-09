@@ -9,7 +9,9 @@ defmodule Slink.Application do
       {Task.Supervisor, name: Slink.TaskSupervisor},
       # Per-channel outbound rate limiting: a registry + one worker per channel.
       {Registry, keys: :unique, name: Slink.Rate.Registry},
-      {DynamicSupervisor, name: Slink.Rate.Supervisor, strategy: :one_for_one}
+      {DynamicSupervisor, name: Slink.Rate.Supervisor, strategy: :one_for_one},
+      # Remembers recently-seen event ids so retried deliveries dispatch once.
+      Slink.Dedup
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Slink.Supervisor)

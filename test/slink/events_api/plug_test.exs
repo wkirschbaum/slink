@@ -20,6 +20,18 @@ defmodule Slink.EventsApi.PlugTest do
     end
   end
 
+  # Answers a modal submit synchronously with a `response_action`.
+  defmodule AckBot do
+    use Slink
+
+    @impl true
+    def handle_event(%Slink.Event{type: :view_submission}, _context) do
+      {:ack, %{response_action: "errors", errors: %{"block" => "nope"}}}
+    end
+
+    def handle_event(_event, _context), do: :ok
+  end
+
   setup do
     Process.register(self(), :plug_test_sink)
     :ok
@@ -34,13 +46,18 @@ defmodule Slink.EventsApi.PlugTest do
       "v0=" <> (:crypto.mac(:hmac, :sha256, secret, basestring) |> Base.encode16(case: :lower))
 
     conn(:post, "/slack/events", body)
-    |> put_req_header("content-type", "application/json")
+    |> put_req_header("content-type", Keyword.get(opts, :content_type, "application/json"))
     |> put_req_header("x-slack-request-timestamp", to_string(timestamp))
     |> put_req_header("x-slack-signature", signature)
   end
 
-  defp opts do
-    Slink.EventsApi.Plug.init(module: TestBot, signing_secret: @secret, bot_token: "xoxb-test")
+  # A signed `application/x-www-form-urlencoded` request (slash / interactivity).
+  defp signed_form(params) do
+    signed_conn(URI.encode_query(params), content_type: "application/x-www-form-urlencoded")
+  end
+
+  defp opts(module \\ TestBot) do
+    Slink.EventsApi.Plug.init(module: module, signing_secret: @secret, bot_token: "xoxb-test")
   end
 
   test "answers the url_verification challenge" do
@@ -102,5 +119,45 @@ defmodule Slink.EventsApi.PlugTest do
 
     conn = Slink.EventsApi.Plug.call(conn, opts())
     assert conn.status == 413
+  end
+
+  test "decodes a form-encoded slash command and dispatches it" do
+    conn =
+      Slink.EventsApi.Plug.call(
+        signed_form(%{"command" => "/slink", "text" => "hi", "channel_id" => "C1"}),
+        opts()
+      )
+
+    assert conn.status == 200
+    assert_receive {:event, %Slink.Event{type: :slash_commands, kind: :slash_commands}}, 1_000
+  end
+
+  test "decodes a form-encoded interaction (payload field) and dispatches it" do
+    payload = JSON.encode!(%{"type" => "block_actions", "trigger_id" => "T1"})
+    conn = Slink.EventsApi.Plug.call(signed_form(%{"payload" => payload}), opts())
+
+    assert conn.status == 200
+    assert_receive {:event, %Slink.Event{type: :block_actions, kind: :interactive}}, 1_000
+  end
+
+  test "answers a view_submission synchronously with the handler's response_action" do
+    payload = JSON.encode!(%{"type" => "view_submission", "view" => %{"callback_id" => "m"}})
+    conn = Slink.EventsApi.Plug.call(signed_form(%{"payload" => payload}), opts(AckBot))
+
+    assert conn.status == 200
+
+    assert JSON.decode!(conn.resp_body) == %{
+             "response_action" => "errors",
+             "errors" => %{"block" => "nope"}
+           }
+  end
+
+  test "a view_submission with no ack payload closes the modal (empty 200)" do
+    # TestBot returns :ok, so there's no response_action — an empty body closes it.
+    payload = JSON.encode!(%{"type" => "view_submission", "view" => %{"callback_id" => "m"}})
+    conn = Slink.EventsApi.Plug.call(signed_form(%{"payload" => payload}), opts())
+
+    assert conn.status == 200
+    assert conn.resp_body == ""
   end
 end

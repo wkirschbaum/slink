@@ -35,7 +35,7 @@ existing options each leave a gap:
 ```elixir
 def deps do
   [
-    {:slink, "~> 0.1"}
+    {:slink, "~> 0.2"}
   ]
 end
 ```
@@ -148,6 +148,57 @@ In Slack, invite the bot to a channel with `/invite @slink`, then mention it:
 > Want the bot to auto-join channels on boot? Pass `join: ["C0123456789"]` to
 > `Slink.SocketMode`. Tune the outbound rate limit with
 > `config :slink, :rate_interval_ms, 1_000`.
+
+## Beyond messages — slash commands, buttons & modals
+
+The same `handle_event/2` handles slash commands and interactive components, over
+either transport. Match on the event `type`; reply the same way you always do.
+
+```elixir
+def handle_event(%Event{type: :slash_commands} = event, context) do
+  # Slash commands reply through their response_url — reply/3 handles that.
+  # to: :ephemeral (default) shows only the invoker; to: :channel posts publicly.
+  reply(context, "running `#{Event.text(event)}`…", to: :channel)
+end
+
+def handle_event(%Event{type: :block_actions} = event, context) do
+  # A button/menu click. reply/3 posts on the message the component is on.
+  reply(context, "you picked #{Event.action_value(event)}")
+end
+
+def handle_event(%Event{type: :shortcut} = _event, context) do
+  # Open a modal. Uses the event's trigger_id (valid ~3s), so open promptly.
+  open_modal(context, my_view())
+  :ok
+end
+
+def handle_event(%Event{type: :view_submission} = event, _context) do
+  # A modal submit. Return {:ack, map} to control the modal; this one runs
+  # synchronously so keep it quick. Anything else closes the modal.
+  case Event.view_values(event) do
+    %{"email" => %{"input" => %{"value" => v}}} when v == "" ->
+      {:ack, %{response_action: "errors", errors: %{"email" => "required"}}}
+
+    _ ->
+      :ok
+  end
+end
+```
+
+You have room to choose *how* to respond:
+
+- **Return a value** — `:ok`, `{:reply, text}` / `{:reply, text, opts}`, or (for a
+  modal submit) `{:ack, map}`. The simplest path.
+- **Call a helper** — `reply/3` (routes to a thread, channel, or `response_url`
+  as the event demands), `send_message/4`, `open_modal/2`, `working/3`.
+- **Call the Web API directly** — `Slink.API` (`post_ephemeral/5`,
+  `update_message/5`, `views.*`, `respond/2`, …) for anything the helpers don't
+  cover.
+
+Over the Events API, point the app's **Interactivity** and **Slash Commands**
+Request URLs at the same endpoint as events; Slink decodes all three. Slack
+retries deliveries it doesn't see ACKed — Slink drops the duplicates
+(`Slink.Dedup`) so your handler fires once.
 
 ## Going to production — Events API (HTTP)
 

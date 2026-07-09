@@ -186,4 +186,142 @@ defmodule Slink.EventTest do
       assert Event.command(msg(%{"text" => "just text"})) == "just text"
     end
   end
+
+  describe "interactions surface their inner type" do
+    test "from_socket_mode routes block_actions/view_submission on the inner type" do
+      assert %Event{type: :block_actions, kind: :interactive} =
+               Event.from_socket_mode(%{
+                 "type" => "interactive",
+                 "payload" => %{"type" => "block_actions"}
+               })
+
+      assert %Event{type: :view_submission, kind: :interactive} =
+               Event.from_socket_mode(%{
+                 "type" => "interactive",
+                 "payload" => %{"type" => "view_submission"}
+               })
+    end
+  end
+
+  describe "from_http_form/1" do
+    test "treats a `payload` field as a JSON interaction, on the inner type" do
+      form = %{"payload" => JSON.encode!(%{"type" => "block_actions", "trigger_id" => "T1"})}
+
+      assert %Event{type: :block_actions, kind: :interactive, transport: :http} =
+               event =
+               Event.from_http_form(form)
+
+      assert Event.trigger_id(event) == "T1"
+    end
+
+    test "treats other forms as a slash command whose fields are the payload" do
+      form = %{
+        "command" => "/deploy",
+        "text" => "web prod",
+        "user_id" => "U1",
+        "channel_id" => "C1",
+        "response_url" => "https://hooks.slack/r/1",
+        "trigger_id" => "T1"
+      }
+
+      event = Event.from_http_form(form)
+
+      assert %Event{type: :slash_commands, kind: :slash_commands, transport: :http} = event
+      assert Event.command_name(event) == "/deploy"
+      assert Event.text(event) == "web prod"
+      assert Event.user(event) == "U1"
+      assert Event.channel(event) == "C1"
+      assert Event.response_url(event) == "https://hooks.slack/r/1"
+    end
+
+    test "tolerates an undecodable payload field" do
+      assert %Event{kind: :interactive, payload: %{}} =
+               Event.from_http_form(%{"payload" => "not json"})
+    end
+  end
+
+  describe "interaction accessors" do
+    defp block_actions do
+      Event.from_socket_mode(%{
+        "type" => "interactive",
+        "payload" => %{
+          "type" => "block_actions",
+          "user" => %{"id" => "U1", "username" => "alice"},
+          "trigger_id" => "T1",
+          "response_url" => "https://hooks.slack/r/1",
+          "actions" => [
+            %{"action_id" => "approve", "value" => "yes"},
+            %{"action_id" => "pick", "selected_option" => %{"value" => "b"}}
+          ]
+        }
+      })
+    end
+
+    test "user/1 digs the nested id out of an interaction" do
+      assert Event.user(block_actions()) == "U1"
+    end
+
+    test "actions/action_id/action_value read the first action" do
+      event = block_actions()
+      assert length(Event.actions(event)) == 2
+      assert Event.action_id(event) == "approve"
+      assert Event.action_value(event) == "yes"
+    end
+
+    test "action_value falls back to a select menu's selected_option" do
+      event =
+        Event.from_socket_mode(%{
+          "type" => "interactive",
+          "payload" => %{
+            "type" => "block_actions",
+            "actions" => [%{"action_id" => "pick", "selected_option" => %{"value" => "b"}}]
+          }
+        })
+
+      assert Event.action_value(event) == "b"
+    end
+
+    test "view/view_values/callback_id read a view_submission" do
+      event =
+        Event.from_socket_mode(%{
+          "type" => "interactive",
+          "payload" => %{
+            "type" => "view_submission",
+            "view" => %{
+              "callback_id" => "my_modal",
+              "state" => %{"values" => %{"block" => %{"input" => %{"value" => "x"}}}}
+            }
+          }
+        })
+
+      assert Event.callback_id(event) == "my_modal"
+      assert Event.view(event)["callback_id"] == "my_modal"
+      assert Event.view_values(event) == %{"block" => %{"input" => %{"value" => "x"}}}
+    end
+  end
+
+  describe "dedup and retry helpers" do
+    test "event_id/1 reads the id from either transport's shape" do
+      socket =
+        Event.from_socket_mode(%{
+          "type" => "events_api",
+          "payload" => %{"event_id" => "Ev1", "event" => %{"type" => "message"}}
+        })
+
+      http = Event.from_http(%{"type" => "event_callback", "event_id" => "Ev2", "event" => %{}})
+
+      assert Event.event_id(socket) == "Ev1"
+      assert Event.event_id(http) == "Ev2"
+    end
+
+    test "retry_attempt/retry? reflect the delivery's retry count" do
+      first = Event.from_http(%{"type" => "event_callback", "event" => %{}})
+      retried = Event.from_http(%{"type" => "event_callback", "event" => %{}, "retry_num" => 2})
+
+      refute Event.retry?(first)
+      assert Event.retry_attempt(first) == 0
+      assert Event.retry?(retried)
+      assert Event.retry_attempt(retried) == 2
+    end
+  end
 end

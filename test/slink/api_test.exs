@@ -49,4 +49,39 @@ defmodule Slink.APITest do
     Application.put_env(:slink, :api_base_url, "http://127.0.0.1:1")
     assert {:error, _reason} = API.open_connection("xapp-test")
   end
+
+  test "update_message/5 and delete_message/3 succeed" do
+    assert {:ok, %{"ok" => true}} = API.update_message("xoxb", "C1", "1.2", "edited")
+    assert {:ok, %{"ok" => true}} = API.delete_message("xoxb", "C1", "1.2")
+  end
+
+  test "post_ephemeral/5 succeeds" do
+    assert {:ok, %{"ok" => true}} = API.post_ephemeral("xoxb", "C1", "U1", "just for you")
+  end
+
+  test "get_permalink/3 returns the permalink URL" do
+    assert {:ok, "https://slack/p1"} = API.get_permalink("xoxb", "C1", "1.2")
+  end
+
+  test "user_info/2 returns the user profile" do
+    assert {:ok, %{"user" => %{"name" => "alice"}}} = API.user_info("xoxb", "U1")
+  end
+
+  test "views open/update/push/publish succeed" do
+    assert {:ok, %{"view" => %{"id" => "V1"}}} = API.open_view("xoxb", "trigger", %{})
+    assert {:ok, %{"view" => %{"id" => "V1"}}} = API.update_view("xoxb", "V1", %{})
+    assert {:ok, %{"view" => %{"id" => "V2"}}} = API.push_view("xoxb", "trigger", %{})
+    assert {:ok, %{"ok" => true}} = API.publish_view("xoxb", "U1", %{})
+  end
+
+  test "respond/2 posts to a response_url" do
+    base = Application.get_env(:slink, :api_base_url)
+    assert {:ok, _} = API.respond("#{base}/response", %{text: "hi", response_type: "ephemeral"})
+  end
+
+  test "call/3 retries a 429 and gives up with the last response after max_retries" do
+    # `rate.limited` always answers 429 (Retry-After: 0). Proves the retry path
+    # runs and, once exhausted, surfaces the final response rather than looping.
+    assert {:error, {:http, 429, _body}} = API.call("xoxb", "rate.limited", %{})
+  end
 end

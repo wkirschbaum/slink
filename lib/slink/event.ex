@@ -9,9 +9,10 @@ defmodule Slink.Event do
 
   ## Fields
 
-    * `:type` — the routable type. For event callbacks this is the inner Slack
-      event type (e.g. `"app_mention"`, `"message"`); otherwise the envelope
-      kind (`"slash_commands"`, `"interactive"`, `"url_verification"`, ...).
+    * `:type` — the type you match on, as an atom for known types. The inner
+      Slack type for event callbacks (`:app_mention`, `:message`) and
+      interactions (`:block_actions`, `:view_submission`, …), or the envelope
+      kind otherwise (`:slash_commands`, `:url_verification`).
     * `:subtype` — the event subtype, when present (e.g. `"bot_message"`).
     * `:payload` — the inner event/command/interaction map you'll usually read.
     * `:raw` — the full original map, if you need something not surfaced above.
@@ -44,6 +45,7 @@ defmodule Slink.Event do
     member_joined_channel member_left_channel
     team_join
     slash_commands interactive url_verification
+    block_actions view_submission view_closed shortcut message_action
   )a
 
   @type_map Map.new(@known_types, &{Atom.to_string(&1), &1})
@@ -61,12 +63,22 @@ defmodule Slink.Event do
   def channel(%__MODULE__{kind: :interactive, payload: payload}),
     do: get_in(payload, ["channel", "id"]) || get_in(payload, ["container", "channel_id"])
 
+  def channel(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["channel_id"]
+
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
   @doc "The event's text, or an empty string."
   def text(%__MODULE__{payload: payload}), do: payload["text"] || ""
 
-  @doc "The user who produced the event (author of the message), or `nil`."
+  @doc """
+  The user who produced the event, or `nil`.
+
+  Interactions nest the user as a map (`user.id`) and slash commands carry a
+  flat `user_id`; both are surfaced here as the plain user id, like message
+  events.
+  """
+  def user(%__MODULE__{kind: :interactive, payload: payload}), do: get_in(payload, ["user", "id"])
+  def user(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["user_id"]
   def user(%__MODULE__{payload: payload}), do: payload["user"]
 
   # A Slack user mention in message text looks like `<@U0123ABCD>`, and sometimes
@@ -151,6 +163,82 @@ defmodule Slink.Event do
   """
   def reply_thread(%__MODULE__{} = event), do: thread_ts(event) || ts(event)
 
+  @doc "The slash command name, e.g. `\"/deploy\"` (slash commands only), or `nil`."
+  def command_name(%__MODULE__{payload: payload}), do: payload["command"]
+
+  @doc """
+  The short-lived `response_url` a slash command or interaction carries, or `nil`.
+
+  Valid for ~30 minutes and up to 5 posts; use it with `Slink.API.respond/2` (or
+  just `reply/3`, which routes there automatically for these events).
+  """
+  def response_url(%__MODULE__{payload: payload}), do: payload["response_url"]
+
+  @doc """
+  The `trigger_id` needed to open a modal in response to this event, or `nil`.
+
+  Present on slash commands and most interactions; valid for only ~3 seconds.
+  """
+  def trigger_id(%__MODULE__{payload: payload}), do: payload["trigger_id"]
+
+  @doc "The list of actions in a `block_actions` interaction (empty otherwise)."
+  def actions(%__MODULE__{payload: payload}), do: payload["actions"] || []
+
+  @doc "The `action_id` of the first action in a `block_actions` interaction, or `nil`."
+  def action_id(%__MODULE__{} = event) do
+    case actions(event) do
+      [%{"action_id" => id} | _] -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The value of the first action, or `nil`.
+
+  Handles a button's `value` and a select menu's `selected_option.value`.
+  """
+  def action_value(%__MODULE__{} = event) do
+    case actions(event) do
+      [action | _] -> action["value"] || get_in(action, ["selected_option", "value"])
+      _ -> nil
+    end
+  end
+
+  @doc "The `callback_id` of a shortcut / message action / view, or `nil`."
+  def callback_id(%__MODULE__{payload: payload}),
+    do: payload["callback_id"] || get_in(payload, ["view", "callback_id"])
+
+  @doc "The `view` map of a `view_submission` / `view_closed` interaction, or `nil`."
+  def view(%__MODULE__{payload: payload}), do: payload["view"]
+
+  @doc "A modal's submitted input values (`view.state.values`), or `%{}`."
+  def view_values(%__MODULE__{payload: payload}),
+    do: get_in(payload, ["view", "state", "values"]) || %{}
+
+  @doc """
+  Slack's per-event id (`event_id`) for an event callback, or `nil`.
+
+  Stable across Slack's retries of the same event, so it's the dedup key (see
+  `Slink.Dedup`). Only event callbacks carry one — slash commands and
+  interactions return `nil`.
+  """
+  def event_id(%__MODULE__{transport: :socket_mode, raw: raw}),
+    do: get_in(raw, ["payload", "event_id"])
+
+  def event_id(%__MODULE__{raw: raw}), do: raw["event_id"]
+
+  @doc """
+  Slack's retry attempt number for this delivery (`0` for a first delivery).
+
+  Socket Mode carries it on the envelope; over HTTP the plug stashes the
+  `X-Slack-Retry-Num` header into the body so it's visible here too.
+  """
+  def retry_attempt(%__MODULE__{transport: :socket_mode, raw: raw}), do: raw["retry_attempt"] || 0
+  def retry_attempt(%__MODULE__{raw: raw}), do: raw["retry_num"] || 0
+
+  @doc "Whether Slack flagged this as a retry of an earlier delivery."
+  def retry?(%__MODULE__{} = event), do: retry_attempt(event) > 0
+
   @doc "Normalise a decoded Socket Mode envelope."
   def from_socket_mode(%{"type" => "events_api"} = env) do
     event = get_in(env, ["payload", "event"]) || %{}
@@ -168,14 +256,16 @@ defmodule Slink.Event do
 
   def from_socket_mode(%{"type" => type, "payload" => payload} = env)
       when type in ["slash_commands", "interactive"] do
-    kind = %{"slash_commands" => :slash_commands, "interactive" => :interactive}
+    payload = payload || %{}
 
     %__MODULE__{
-      type: normalize_type(type),
-      payload: payload || %{},
+      # For interactions, route on the inner kind (`:block_actions`,
+      # `:view_submission`, …) rather than the envelope's `"interactive"`.
+      type: envelope_type(type, payload),
+      payload: payload,
       raw: env,
       transport: :socket_mode,
-      kind: Map.fetch!(kind, type),
+      kind: if(type == "slash_commands", do: :slash_commands, else: :interactive),
       envelope_id: env["envelope_id"]
     }
   end
@@ -212,4 +302,41 @@ defmodule Slink.Event do
       kind: :other
     }
   end
+
+  @doc """
+  Normalise a decoded `application/x-www-form-urlencoded` body.
+
+  Slack delivers slash commands and interactions over HTTP as a form, not JSON.
+  Interactions carry a single `"payload"` field holding JSON (decoded here);
+  anything else is a slash command whose form fields *are* the payload.
+  """
+  def from_http_form(%{"payload" => json}) when is_binary(json) do
+    payload =
+      case JSON.decode(json) do
+        {:ok, map} when is_map(map) -> map
+        _ -> %{}
+      end
+
+    %__MODULE__{
+      type: normalize_type(payload["type"]),
+      payload: payload,
+      raw: %{"payload" => payload},
+      transport: :http,
+      kind: :interactive
+    }
+  end
+
+  def from_http_form(params) when is_map(params) do
+    %__MODULE__{
+      type: :slash_commands,
+      payload: params,
+      raw: params,
+      transport: :http,
+      kind: :slash_commands
+    }
+  end
+
+  # Route interactions on their inner kind; slash commands keep the envelope kind.
+  defp envelope_type("slash_commands", _payload), do: :slash_commands
+  defp envelope_type("interactive", payload), do: normalize_type(payload["type"])
 end
