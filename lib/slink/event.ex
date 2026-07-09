@@ -118,9 +118,9 @@ defmodule Slink.Event do
   Whether the app itself was mentioned — i.e. an `app_mention` event.
 
   This is the "someone @-mentioned the bot" signal. To see who *else* is
-  mentioned in the text, use `mentions/1`.
+  mentioned in the text, use `mentions/1` (note the plural).
   """
-  def mention?(%__MODULE__{type: type}), do: type == :app_mention
+  def app_mention?(%__MODULE__{type: type}), do: type == :app_mention
 
   @doc """
   User IDs mentioned in the event's text, in order (e.g. `["U0123", "U0456"]`).

@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-09
+
+A review-hardening release: closes the last token-to-logs path, removes a
+connection crash-loop, and tightens the helper API for predictability. One small
+breaking rename.
+
+### Security
+
+- **A bot token could reach crash logs via `Slink.Context`.** The context is
+  handed to your `handle_event/2`, so a raising handler (e.g. a bot with no
+  catch-all clause hitting a `FunctionClauseError`) had OTP print the context —
+  token included — as a blamed argument. `Slink.Context` now derives an `Inspect`
+  that omits `:bot_token`, closing the one leak the transports' `format_status/1`
+  didn't already cover.
+
+### Fixed
+
+- **A raising `open_connection` no longer crash-loops the Socket Mode client.**
+  With a missing/`nil` app token `Req` *raises* rather than returning an error;
+  `connect/1` runs in `handle_continue`/`handle_info`, so the unrescued raise
+  crashed the GenServer before its backoff — escalating into a supervisor restart
+  loop that could take the host app down. `connect/1` now contains any raise/exit
+  and schedules a backed-off retry, as its contract always promised.
+- **`Slink.API.open_connection/1`** degrades a malformed `ok: true` response with
+  no `"url"` to `{:error, {:no_url, body}}` instead of raising `CaseClauseError`.
+- **`send_message/4` accepts a keyword list *or* a map** for opts, matching
+  `reply/3` — `send_message(ctx, ch, "hi", blocks: [...])` previously raised
+  `BadMapError`.
+- **An invalid `to:` raises a clear `ArgumentError`** naming the allowed values,
+  instead of a cryptic `FunctionClauseError` (message replies: `:auto` / `:thread`
+  / `:channel`) or silently collapsing to ephemeral (slash replies: `:ephemeral`
+  / `:channel`).
+- **A signing-secret/bot-token resolver that raises** (e.g. `System.fetch_env!`
+  on an unset var) is treated as unset — the request fails closed (401) instead
+  of 500ing.
+- **A `view_submission` handler that returns `{:reply, …}`** (silently dropped —
+  a modal submit answers only with `{:ack, map}`) now logs a warning, so the
+  no-op is visible.
+
+### Changed
+
+- **Breaking: `Event.mention?/1` is renamed to `Event.app_mention?/1`**, to
+  disambiguate it from `mentions?/2` ("is this an `app_mention` event" vs "is a
+  given user mentioned in the text"). Rename any call sites.
+- **`in_thread?/1` also accepts a `context`** (not just an `Event`), consistent
+  with the other `use Slink` helpers.
+
 ## [0.3.2] - 2026-07-09
 
 ### Documentation
@@ -101,7 +148,7 @@ frame can take a transport down.
   held a tuple), encoding the ACK frame raised inside the transport process — on
   Socket Mode this crashed the connection and the supervisor's restart re-read
   the same envelope, producing a crash-reconnect loop. The payload is now checked
-  for encodability in `Slink.Dispatcher.ack_result/3`; a non-encodable one is
+  for encodability before the ACK frame is built; a non-encodable one is
   logged and degrades to `%{}` (closing the modal), like a handler crash already
   does.
 - **A malformed Slack frame can no longer crash the Socket Mode connection.**
@@ -199,6 +246,7 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
+[0.4.0]: https://github.com/wkirschbaum/slink/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/wkirschbaum/slink/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/wkirschbaum/slink/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/wkirschbaum/slink/compare/v0.2.2...v0.3.0

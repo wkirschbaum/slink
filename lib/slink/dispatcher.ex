@@ -96,9 +96,27 @@ defmodule Slink.Dispatcher do
   # for a transport to fold into its ACK, rather than performing a reply.
   defp run(module, %Event{} = event, %Slink.Context{} = context) do
     case invoke(module, event, %{context | event: event}) do
-      {:ack, payload} when is_map(payload) -> payload
-      _ -> %{}
+      {:ack, payload} when is_map(payload) ->
+        payload
+
+      other ->
+        warn_dropped_reply(other, event.type)
+        %{}
     end
+  end
+
+  # A modal submit can only answer via {:ack, map} (or :ok/anything to close it).
+  # Returning {:reply, …} looks like it should send a message but is silently
+  # dropped here — warn so the mistake is visible rather than a mysterious no-op.
+  defp warn_dropped_reply({:reply, _}, type), do: log_dropped_reply(type)
+  defp warn_dropped_reply({:reply, _, _}, type), do: log_dropped_reply(type)
+  defp warn_dropped_reply(_other, _type), do: :ok
+
+  defp log_dropped_reply(type) do
+    Logger.warning(
+      "Slink: a #{inspect(type)} handler returned {:reply, ...}, which is ignored — a modal " <>
+        "submission answers only with {:ack, map} (or :ok to close). Nothing was sent."
+    )
   end
 
   # Load the handler and call it. `function_exported?/3` reports false for a

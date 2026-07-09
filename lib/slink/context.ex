@@ -12,6 +12,11 @@ defmodule Slink.Context do
       the context). Set by the dispatcher before your handler runs.
   """
 
+  # The context is handed to user handlers, so it's an argument in any
+  # handler-crash report (OTP blames the arguments). Keep the bot token out of
+  # that output — the transports redact their own state via format_status/1, and
+  # this closes the same leak on the handler side.
+  @derive {Inspect, except: [:bot_token]}
   @enforce_keys [:transport]
   defstruct [:transport, :bot_token, :event]
 

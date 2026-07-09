@@ -416,4 +416,13 @@ defmodule Slink.SocketModeTest do
     Process.sleep(50)
     assert Process.alive?(pid)
   end
+
+  test "survives when open_connection raises (e.g. a nil app_token), and retries" do
+    # Req raises rather than returning an error tuple for a nil bearer token;
+    # connect/1 must contain it and schedule a retry, not crash into a loop.
+    pid = start_client("ws://unused", open_connection: fn -> raise "boom from Req" end)
+
+    Process.sleep(50)
+    assert Process.alive?(pid)
+  end
 end

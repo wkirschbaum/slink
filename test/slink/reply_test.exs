@@ -116,6 +116,30 @@ defmodule Slink.ReplyTest do
     end
   end
 
+  describe "send_message/4" do
+    test "accepts keyword opts (like reply/3), not just a map" do
+      assert :ok =
+               Slink.send_message(context(event("C-sm")), "C-sm", "hi",
+                 thread_ts: "1.0",
+                 blocks: [%{type: "section"}]
+               )
+
+      assert_receive {:sent,
+                      %{
+                        channel: "C-sm",
+                        text: "hi",
+                        thread_ts: "1.0",
+                        blocks: [%{type: "section"}]
+                      }},
+                     1_000
+    end
+
+    test "still accepts a map for backward compatibility" do
+      assert :ok = Slink.send_message(context(event("C-sm2")), "C-sm2", "hi", %{thread_ts: "9.9"})
+      assert_receive {:sent, %{channel: "C-sm2", text: "hi", thread_ts: "9.9"}}, 1_000
+    end
+  end
+
   describe "reply/3 to a block_actions interaction" do
     defp click(channel, message) do
       %Event{

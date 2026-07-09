@@ -156,6 +156,10 @@ defmodule Slink.SocketMode do
 
   # Every failure here schedules a retry and returns a valid state — a bad token,
   # DNS failure, or Slack outage must never crash the process (or the host app).
+  # This runs in handle_continue/handle_info, so the try/rescue/catch matters:
+  # open_connection.() (e.g. Req with a nil app_token) *raises* rather than
+  # returning an error, and an unrescued raise here would crash the GenServer
+  # before retry/1's backoff, escalating into a supervisor restart loop.
   defp connect(state) do
     Logger.debug("Slink: opening Socket Mode connection")
 
@@ -167,6 +171,14 @@ defmodule Slink.SocketMode do
         Logger.error("Slink: could not obtain connection URL (#{inspect(other)}), retrying")
         retry(state)
     end
+  rescue
+    e ->
+      Logger.error("Slink: connect raised (#{inspect(e)}), retrying")
+      retry(state)
+  catch
+    kind, reason ->
+      Logger.error("Slink: connect #{kind}ed (#{inspect(reason)}), retrying")
+      retry(state)
   end
 
   defp open_socket(state, %URI{host: host} = uri) when is_binary(host) do
@@ -176,20 +188,17 @@ defmodule Slink.SocketMode do
       {:ok, conn} ->
         case Mint.WebSocket.upgrade(ws_scheme, conn, path(uri), []) do
           {:ok, conn, ref} ->
-            # pending is reset here, not just on disconnect: a reconnect that
-            # fires mid-batch can buffer trailing bytes from the *old*
-            # connection after the disconnect nulled it — decoding those with
-            # the new connection's websocket would corrupt its framing.
-            # last_activity restarts the idle clock for this attempt.
-            %{
+            # reset_stream/1 clears the frame-assembly buffers here (not only on
+            # disconnect): a reconnect firing mid-batch can buffer trailing bytes
+            # from the *old* connection, and decoding those against the new
+            # websocket would corrupt its framing. last_activity restarts the
+            # idle clock for this attempt.
+            reset_stream(%{
               state
               | conn: conn,
                 request_ref: ref,
-                status: nil,
-                resp_headers: nil,
-                pending: "",
                 last_activity: System.monotonic_time(:millisecond)
-            }
+            })
 
           {:error, conn, reason} ->
             Logger.error("Slink: upgrade failed (#{inspect(reason)}), retrying")
@@ -213,10 +222,7 @@ defmodule Slink.SocketMode do
 
   # A previously-live connection dropped — close it, then back off and reconnect.
   defp reconnect(state) do
-    :telemetry.execute([:slink, :socket, :disconnected], %{system_time: System.system_time()}, %{
-      module: state.module
-    })
-
+    emit([:slink, :socket, :disconnected], state.module)
     safe_close(state.conn)
     schedule_reconnect(state)
   end
@@ -229,16 +235,13 @@ defmodule Slink.SocketMode do
     Logger.debug("Slink: reconnecting in #{delay}ms")
     Process.send_after(self(), :connect, delay)
 
-    %{
+    reset_stream(%{
       state
       | conn: nil,
         websocket: nil,
         request_ref: nil,
-        status: nil,
-        resp_headers: nil,
-        pending: "",
         backoff: state.backoff + 1
-    }
+    })
   end
 
   defp backoff_delay(attempt) do
@@ -266,6 +269,15 @@ defmodule Slink.SocketMode do
   defp schemes("ws"), do: {:http, :ws}
   defp schemes(_wss), do: {:https, :wss}
 
+  # Clear the HTTP-upgrade/frame-assembly buffers. Single-sourced so a fresh
+  # connection and a reconnect can't drift on which fields get reset.
+  defp reset_stream(state), do: %{state | status: nil, resp_headers: nil, pending: ""}
+
+  # Emit a socket-lifecycle telemetry event with a consistent measurement/metadata shape.
+  defp emit(event, module) do
+    :telemetry.execute(event, %{system_time: System.system_time()}, %{module: module})
+  end
+
   ## HTTP-upgrade + WebSocket-frame responses
 
   defp handle_responses(state, responses) do
@@ -279,10 +291,7 @@ defmodule Slink.SocketMode do
     case Mint.WebSocket.new(state.conn, ref, state.status, state.resp_headers) do
       {:ok, conn, websocket} ->
         Logger.info("Slink: Socket Mode connected")
-
-        :telemetry.execute([:slink, :socket, :connected], %{system_time: System.system_time()}, %{
-          module: state.module
-        })
+        emit([:slink, :socket, :connected], state.module)
 
         # Flush any frame bytes that arrived before this {:done} (see the
         # websocket: nil clause of handle_response/2 below). The backoff counter

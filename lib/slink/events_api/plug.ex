@@ -165,7 +165,21 @@ defmodule Slink.EventsApi.Plug do
   # Phoenix `forward` evaluates init options at compile time in production, so a
   # literal `System.fetch_env!/1` there reads the build machine's env. A
   # function defers the read to runtime.
-  defp resolve(fun) when is_function(fun, 0), do: fun.()
+  # A resolver that raises (e.g. `fn -> System.fetch_env!("…") end` on an unset
+  # var) is treated as "unset" rather than crashing the request into a 500: a nil
+  # signing secret then fails closed (401), and a nil bot token degrades a reply
+  # rather than taking anything down.
+  defp resolve(fun) when is_function(fun, 0) do
+    fun.()
+  rescue
+    e ->
+      Logger.warning(
+        "Slink: a signing_secret/bot_token resolver raised (#{inspect(e)}); treating as unset"
+      )
+
+      nil
+  end
+
   defp resolve(value), do: value
 
   defp form?(conn) do

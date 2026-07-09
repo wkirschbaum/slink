@@ -29,6 +29,7 @@ defmodule Slink.API do
   def open_connection(app_token) do
     case call(app_token, "apps.connections.open", %{}) do
       {:ok, %{"url" => url}} -> {:ok, url}
+      {:ok, body} -> {:error, {:no_url, body}}
       {:error, reason} -> {:error, reason}
     end
   end

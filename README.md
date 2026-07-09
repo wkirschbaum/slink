@@ -189,9 +189,9 @@ end
 
 def handle_event(%Event{type: :shortcut} = _event, context) do
   # Open a modal. Uses the event's trigger_id (valid ~3s), so open promptly.
-  # open_modal/2 returns {:ok, view} | {:error, reason}; a handler can just end
-  # with it (a non-{:reply, _} return means "nothing to reply"). Match it when
-  # you need view["id"] for a later update_view/3 or push_view/3.
+  # open_modal/2 returns {:ok, response} | {:error, reason}; a handler can just
+  # end with it (a non-{:reply, _} return means "nothing to reply"). Match it
+  # when you need response["view"]["id"] for a later update_view/3 / push_view/3.
   open_modal(context, my_view())
 end
 

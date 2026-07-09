@@ -103,6 +103,23 @@ defmodule Slink.EventsApi.PlugTest do
     end
   end
 
+  test "fails closed (401, not 500) when a secret resolver raises" do
+    # e.g. `fn -> System.fetch_env!("MISSING") end`. A raising resolver must be
+    # treated as unset (401), never crash the request into a 500.
+    opts =
+      Slink.EventsApi.Plug.init(
+        module: TestBot,
+        signing_secret: fn -> raise "env not set" end
+      )
+
+    body = JSON.encode!(%{type: "event_callback", event: %{type: "app_mention"}})
+
+    capture_log(fn ->
+      conn = Slink.EventsApi.Plug.call(signed_conn(body), opts)
+      assert conn.status == 401
+    end)
+  end
+
   test "answers the url_verification challenge" do
     body = JSON.encode!(%{type: "url_verification", challenge: "the-challenge"})
     conn = Slink.EventsApi.Plug.call(signed_conn(body), opts())

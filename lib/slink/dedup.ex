@@ -5,7 +5,7 @@ defmodule Slink.Dedup do
   Slack re-sends an event (same `event_id`) when it doesn't see a timely ACK —
   even though both transports ACK before the handler runs, a slow network or a
   restart can still produce duplicates. This keeps a short-lived set of seen
-  keys (`{handler_module, event_id}`) in ETS; `Slink.Dispatcher` consults it
+  keys (`{handler_module, event_id}`) in ETS; the dispatcher consults it
   before dispatching.
 
   It's a `set` ETS table owned by this process but read/written directly by

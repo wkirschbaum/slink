@@ -111,23 +111,27 @@ defmodule Slink do
   Post a message to `channel`, using the bot token from the handler `context`.
 
   Goes through `Slink.Rate` so sends are rate-limited per channel (Slack allows
-  ~1/sec/channel). `opts` is merged into the request body (e.g. `blocks`,
-  `thread_ts`). `use Slink` imports this, so handlers can call it unqualified:
+  ~1/sec/channel). `opts` — a keyword list or map — is merged into the request
+  body (e.g. `blocks:`, `thread_ts:`), matching `reply/3`'s keyword opts. Returns
+  `:ok`. `use Slink` imports this, so handlers can call it unqualified:
 
       def handle_event(%Slink.Event{type: :app_mention} = event, context) do
         send_message(context, Slink.Event.channel(event), "hi")
       end
   """
-  def send_message(%Slink.Context{bot_token: token}, channel, text, opts \\ %{}) do
-    Slink.Rate.post_message(token, channel, text, opts)
+  def send_message(%Slink.Context{bot_token: token}, channel, text, opts \\ []) do
+    Slink.Rate.post_message(token, channel, text, Map.new(opts))
   end
 
   @doc """
-  Whether `event` happened inside a thread (imported by `use Slink`).
+  Whether the event happened inside a thread (imported by `use Slink`).
 
-  Delegates to `Slink.Event.in_thread?/1`.
+  Accepts either a `context` (like the other imported helpers) or a bare
+  `Slink.Event`. Delegates to `Slink.Event.in_thread?/1`.
   """
-  defdelegate in_thread?(event), to: Slink.Event
+  def in_thread?(%Slink.Context{event: event}), do: in_thread?(event)
+  def in_thread?(%Slink.Event{} = event), do: Slink.Event.in_thread?(event)
+  def in_thread?(nil), do: false
 
   @doc """
   Reply to the event in `context` (imported by `use Slink`). Returns `:ok`, so a
@@ -217,8 +221,18 @@ defmodule Slink do
   defp threaded?(:channel, _event), do: false
   defp threaded?(:auto, event), do: in_thread?(event)
 
+  defp threaded?(other, _event) do
+    raise ArgumentError,
+          "invalid `to: #{inspect(other)}` for a message reply; use :auto, :thread, or :channel"
+  end
+
+  defp slash_type(:ephemeral), do: "ephemeral"
   defp slash_type(:channel), do: "in_channel"
-  defp slash_type(_ephemeral), do: "ephemeral"
+
+  defp slash_type(other) do
+    raise ArgumentError,
+          "invalid `to: #{inspect(other)}` for a slash-command reply; use :ephemeral or :channel"
+  end
 
   @doc """
   Open a modal in response to the interaction or slash command in `context`
@@ -293,25 +307,26 @@ defmodule Slink do
     task = Task.Supervisor.async_nolink(Slink.TaskSupervisor, fun)
 
     case Task.yield(task, delay) do
-      {:ok, result} ->
-        result
-
-      {:exit, reason} ->
-        exit(reason)
-
       nil ->
+        # Still running after `delay`: show the indicator, wait for the result,
+        # then always clear it.
         _ = Slink.API.add_reaction(context.bot_token, channel, ts, emoji)
 
         try do
-          case Task.yield(task, :infinity) do
-            {:ok, result} -> result
-            {:exit, reason} -> exit(reason)
-          end
+          unwrap(Task.yield(task, :infinity))
         after
           _ = Slink.API.remove_reaction(context.bot_token, channel, ts, emoji)
         end
+
+      yielded ->
+        unwrap(yielded)
     end
   end
+
+  # A task exit is re-propagated so a crashing handler still crashes as it would
+  # have run inline.
+  defp unwrap({:ok, result}), do: result
+  defp unwrap({:exit, reason}), do: exit(reason)
 
   defmacro __using__(_opts) do
     quote do

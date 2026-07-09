@@ -149,15 +149,15 @@ defmodule Slink.EventTest do
       assert Event.user(msg(%{})) == nil
     end
 
-    test "mention?/1 is true for app_mention events" do
-      assert Event.mention?(%Event{
+    test "app_mention?/1 is true for app_mention events" do
+      assert Event.app_mention?(%Event{
                type: :app_mention,
                payload: %{},
                raw: %{},
                transport: :socket_mode
              })
 
-      refute Event.mention?(%Event{
+      refute Event.app_mention?(%Event{
                type: :message,
                payload: %{},
                raw: %{},
