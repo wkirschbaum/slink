@@ -267,6 +267,10 @@ The same `MyBot` works unchanged across both transports.
 | Marketplace / distributed apps | ✗ not allowed | ✓ required |
 | Concurrency | capped at 10 connections/app | scales horizontally |
 
+## Roadmap
+
+Planned, non-blocking capability work lives in [ROADMAP.md](ROADMAP.md).
+
 ## Development
 
 ```bash

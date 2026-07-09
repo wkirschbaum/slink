@@ -280,6 +280,35 @@ defmodule Slink.EventTest do
     end
   end
 
+  describe "team_id/1" do
+    test "reads it from an HTTP event_callback body" do
+      body = %{"type" => "event_callback", "team_id" => "T1", "event" => %{"type" => "message"}}
+      assert Event.team_id(Event.from_http(body)) == "T1"
+    end
+
+    test "reads it from a Socket Mode events_api envelope" do
+      envelope = %{
+        "type" => "events_api",
+        "payload" => %{"team_id" => "T2", "event" => %{"type" => "message"}}
+      }
+
+      assert Event.team_id(Event.from_socket_mode(envelope)) == "T2"
+    end
+
+    test "reads the nested team.id from an interaction" do
+      form = %{"payload" => JSON.encode!(%{"type" => "block_actions", "team" => %{"id" => "T3"}})}
+      assert Event.team_id(Event.from_http_form(form)) == "T3"
+    end
+
+    test "reads it from a slash command's form fields" do
+      assert Event.team_id(Event.from_http_form(%{"command" => "/x", "team_id" => "T4"})) == "T4"
+    end
+
+    test "is nil when absent" do
+      assert Event.team_id(Event.from_http(%{"type" => "url_verification"})) == nil
+    end
+  end
+
   describe "interaction accessors" do
     defp block_actions do
       Event.from_socket_mode(%{

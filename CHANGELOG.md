@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-09
+
+Multi-workspace support: one bot module can now serve many workspaces over
+either transport, routing a per-workspace token per request. Plus fixes from a
+deep review of the new code.
+
+### Added
+
+- **Multi-workspace routing.** Slink was already token-per-call throughout; this
+  makes serving several workspaces from one bot straightforward:
+    - `Slink.Event.team_id/1` returns the workspace (team) id for any payload
+      shape (event callback, interaction, slash command; both transports).
+    - `Slink.EventsApi.Plug`'s `:bot_token` now also accepts a **1-arity
+      function**, called with the event's team id — the seam for looking a token
+      up from your own per-team store. String and 0-arity forms are unchanged.
+      The signing secret stays a single value (it's per-app, not per-install).
+    - `Slink.SocketMode` documents running one client per workspace, and now
+      defines `child_spec/1` keyed on `:name` so several clients coexist under
+      one supervisor.
+  Acquiring/storing per-team tokens (the OAuth install flow) remains yours to
+  own — see the roadmap.
+
+### Fixed
+
+- **A token/secret resolver that exits no longer 500s the request.** A 1-arity
+  `:bot_token` (or `:signing_secret`) resolver backed by a token store `exit`s —
+  not raises — on a `GenServer.call` timeout, which `rescue` alone didn't catch.
+  `Slink.EventsApi.Plug` now also traps exits/throws and degrades to unset, as
+  its never-500 contract promises.
+- **`Slink.SocketMode.child_spec/1`** derives its `:id` from `:name`, so the
+  documented one-client-per-workspace pattern boots instead of failing with
+  `:duplicate_child_name` on the default id.
+
+### Documentation
+
+- Corrected `open_modal/2`: the opened view's id is for `update_view/3`;
+  `push_view/3` takes a fresh `trigger_id` from a later in-modal interaction.
+- `Slink.Dedup` documents that dedup is node-local (per-instance).
+- Fixed `mix docs` warnings (doc references to the hidden Dispatcher module).
+
 ## [0.4.0] - 2026-07-09
 
 A review-hardening release: closes the last token-to-logs path, removes a

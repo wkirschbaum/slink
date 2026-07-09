@@ -47,6 +47,17 @@ defmodule Slink.SocketModeTest do
     :ok
   end
 
+  test "child_spec id follows :name, so one client per workspace doesn't collide" do
+    a = Slink.SocketMode.child_spec(module: Bot, name: {:global, {Bot, "T1"}})
+    b = Slink.SocketMode.child_spec(module: Bot, name: {:global, {Bot, "T2"}})
+
+    assert a.id == {:global, {Bot, "T1"}}
+    assert b.id == {:global, {Bot, "T2"}}
+    assert a.id != b.id
+    # Unnamed still defaults to the module, preserving single-instance behaviour.
+    assert Slink.SocketMode.child_spec(module: Bot).id == Slink.SocketMode
+  end
+
   defp view_submission_frames do
     [
       {:text, JSON.encode!(%{"type" => "hello"})},

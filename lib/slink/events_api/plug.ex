@@ -32,7 +32,25 @@ defmodule Slink.EventsApi.Plug do
       verification. A string, or a 0-arity function returning one (resolved per
       request — see *Mounting in Phoenix*).
     * `:bot_token` — bot token (`xoxb-…`) passed to handlers for Web API calls.
-      A string or a 0-arity function.
+      A string, a 0-arity function, or — for a multi-workspace app — a 1-arity
+      function called with the event's team id (see *Multiple workspaces*).
+
+  ## Multiple workspaces
+
+  One app can serve many workspaces from a single endpoint. The signing secret
+  is per-*app*, so it stays one value; only the bot token differs per install.
+  Pass a 1-arity `:bot_token` — it's called with the event's team id
+  (`Slink.Event.team_id/1`), so you look the right token up from your own store:
+
+      forward "/slack/events", to: Slink.EventsApi.Plug,
+        init_opts: [
+          module: MyBot,
+          signing_secret: fn -> System.fetch_env!("SLACK_SIGNING_SECRET") end,
+          bot_token: fn team_id -> MyApp.Installs.bot_token(team_id) end
+        ]
+
+  Acquiring and storing those per-team tokens (the OAuth install flow) is yours
+  to own — Slink only routes to them.
 
   ## Mounting in Phoenix
 
@@ -138,7 +156,7 @@ defmodule Slink.EventsApi.Plug do
   # response into the reply (view_submission) or ACK now and dispatch off-process.
   defp handle(conn, params, opts, normalize) do
     event = normalize.(params)
-    context = %Slink.Context{transport: :http, bot_token: resolve(opts.bot_token)}
+    context = %Slink.Context{transport: :http, bot_token: resolve(opts.bot_token, event)}
 
     if Dispatcher.sync_ack?(event) do
       ack_response(conn, Dispatcher.ack_result(opts.module, event, context))
@@ -165,22 +183,35 @@ defmodule Slink.EventsApi.Plug do
   # Phoenix `forward` evaluates init options at compile time in production, so a
   # literal `System.fetch_env!/1` there reads the build machine's env. A
   # function defers the read to runtime.
-  # A resolver that raises (e.g. `fn -> System.fetch_env!("…") end` on an unset
-  # var) is treated as "unset" rather than crashing the request into a 500: a nil
-  # signing secret then fails closed (401), and a nil bot token degrades a reply
-  # rather than taking anything down.
-  defp resolve(fun) when is_function(fun, 0) do
+  # A resolver that fails (raises, or exits/throws — e.g. a `GenServer.call` to a
+  # token store that times out) is treated as "unset" rather than crashing the
+  # request into a 500: a nil signing secret then fails closed (401), and a nil
+  # bot token degrades a reply rather than taking anything down.
+  defp resolve(fun) when is_function(fun, 0), do: safe_resolve(fun)
+  defp resolve(value), do: value
+
+  # :bot_token may additionally be a 1-arity function, called with the event's
+  # team id — the seam for a multi-workspace app that stores a token per team.
+  defp resolve(fun, event) when is_function(fun, 1),
+    do: safe_resolve(fn -> fun.(Event.team_id(event)) end)
+
+  defp resolve(other, _event), do: resolve(other)
+
+  defp safe_resolve(fun) do
     fun.()
   rescue
-    e ->
-      Logger.warning(
-        "Slink: a signing_secret/bot_token resolver raised (#{inspect(e)}); treating as unset"
-      )
-
-      nil
+    e -> resolver_failed(e)
+  catch
+    kind, reason -> resolver_failed({kind, reason})
   end
 
-  defp resolve(value), do: value
+  defp resolver_failed(detail) do
+    Logger.warning(
+      "Slink: a signing_secret/bot_token resolver failed (#{inspect(detail)}); treating as unset"
+    )
+
+    nil
+  end
 
   defp form?(conn) do
     case get_req_header(conn, "content-type") do

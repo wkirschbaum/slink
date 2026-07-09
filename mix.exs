@@ -1,7 +1,7 @@
 defmodule Slink.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.5.0"
   @source_url "https://github.com/wkirschbaum/slink"
 
   def project do
@@ -72,7 +72,7 @@ defmodule Slink.MixProject do
       main: "readme",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md", "CHANGELOG.md", {:LICENSE, [title: "License"]}],
+      extras: ["README.md", "CHANGELOG.md", "ROADMAP.md", {:LICENSE, [title: "License"]}],
       groups_for_modules: [
         Transports: [Slink.SocketMode, Slink.EventsApi.Plug],
         "Web API": [Slink.API, Slink.Rate],

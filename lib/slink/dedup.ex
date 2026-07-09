@@ -12,6 +12,13 @@ defmodule Slink.Dedup do
   callers (so the dedup check never blocks on a GenServer). A periodic sweep
   evicts entries past their TTL.
 
+  The table is node-local, so dedup is per-instance. Across a multi-node fleet
+  a retry can land on a different instance than the original delivery (Slack
+  load-balances Socket Mode connections, and an HTTP retry can hit a different
+  pod), and that instance won't recognise it. Retries are rare — both
+  transports ACK before the handler runs — so this is a best-effort safety net;
+  hard cross-instance dedup would need a shared store.
+
   ## Configuration
 
     * `config :slink, :dedup, true` — master switch (default `true`). When

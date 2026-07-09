@@ -49,6 +49,19 @@ defmodule Slink do
       Supervisor.start_link(children, strategy: :one_for_one)
 
   See the module docs for `Slink.EventsApi.Plug` to run the HTTP transport.
+
+  ## Multiple workspaces
+
+  Slink is token-per-request throughout: every `Slink.API` call takes a token,
+  the handler context carries the `:bot_token`, and both transports let you pick
+  it per workspace. Over Socket Mode you run one client per workspace (see
+  `Slink.SocketMode`); over HTTP you pass a `:bot_token` resolver that receives
+  the event's team id (see `Slink.EventsApi.Plug`). So one bot module can serve
+  many workspaces.
+
+  What Slink deliberately leaves to you is the **OAuth install flow** —
+  `oauth.v2.access` and persisting a token per team as workspaces install your
+  app. Bring your own token store; Slink routes to whatever token you hand it.
   """
 
   @typedoc "Context passed to `c:handle_event/2`. See `Slink.Context`."
@@ -240,8 +253,10 @@ defmodule Slink do
 
   Returns `{:ok, response} | {:error, reason}` — the standard shape for a call
   that returns data and can fail. `response` is Slack's `views.open` payload, so
-  `response["view"]["id"]` is the id you pass to `update_view/3` / `push_view/3`
-  later. You can also just end a handler with it: the dispatcher treats a
+  `response["view"]["id"]` is the id you pass to `update_view/3` later.
+  (`push_view/3` instead takes a fresh `trigger_id` from a later interaction
+  inside the modal, not the opened view's id.) You can also just end a handler
+  with it: the dispatcher treats a
   non-`{:reply, …}`/`{:ack, …}` return as "no reply" (see `t:result/0`), so a
   bare `open_modal(context, view)` is fine and no trailing `:ok` is needed.
 

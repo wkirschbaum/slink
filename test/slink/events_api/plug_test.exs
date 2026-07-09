@@ -89,6 +89,45 @@ defmodule Slink.EventsApi.PlugTest do
     assert_receive {:ctx, %Slink.Context{bot_token: "xoxb-lazy"}}, 1_000
   end
 
+  test "resolves a 1-arity bot_token with the event's team id (multi-workspace)" do
+    opts =
+      Slink.EventsApi.Plug.init(
+        module: ContextBot,
+        signing_secret: @secret,
+        bot_token: fn team_id -> "xoxb-for-#{team_id}" end
+      )
+
+    body =
+      JSON.encode!(%{type: "event_callback", team_id: "T123", event: %{type: "app_mention"}})
+
+    conn = Slink.EventsApi.Plug.call(signed_conn(body), opts)
+
+    assert conn.status == 200
+    assert_receive {:ctx, %Slink.Context{bot_token: "xoxb-for-T123"}}, 1_000
+  end
+
+  test "a bot_token resolver that exits (e.g. a token-store timeout) degrades to unset, not a 500" do
+    opts =
+      Slink.EventsApi.Plug.init(
+        module: ContextBot,
+        signing_secret: @secret,
+        # `exit` mimics a GenServer.call timeout to a token store — `rescue` alone
+        # wouldn't catch it, which would 500 the request.
+        bot_token: fn _team_id -> exit(:timeout) end
+      )
+
+    body = JSON.encode!(%{type: "event_callback", team_id: "T1", event: %{type: "app_mention"}})
+
+    log =
+      capture_log(fn ->
+        conn = Slink.EventsApi.Plug.call(signed_conn(body), opts)
+        assert conn.status == 200
+      end)
+
+    assert log =~ "resolver failed"
+    assert_receive {:ctx, %Slink.Context{bot_token: nil}}, 1_000
+  end
+
   test "fails closed (401, not 500) when the signing secret is misconfigured" do
     # e.g. a secret function reading a missing env var and returning nil. An
     # empty-key HMAC would also be computable by anyone — never accept it.

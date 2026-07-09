@@ -308,6 +308,20 @@ defmodule Slink.Event do
   @doc "Whether Slack flagged this as a retry of an earlier delivery."
   def retry?(%__MODULE__{} = event), do: retry_attempt(event) > 0
 
+  @doc """
+  The Slack workspace (team) id this event came from, or `nil`.
+
+  For a multi-workspace app, use it to pick the bot token for that team — see
+  the per-request `:bot_token` resolver in `Slink.EventsApi.Plug`.
+  """
+  def team_id(%__MODULE__{kind: :interactive, payload: payload}), do: dig(payload, ["team", "id"])
+  def team_id(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["team_id"]
+
+  def team_id(%__MODULE__{transport: :socket_mode, raw: raw}),
+    do: dig(raw, ["payload", "team_id"]) || dig(raw, ["team_id"])
+
+  def team_id(%__MODULE__{raw: raw}), do: dig(raw, ["team_id"])
+
   @doc "Normalise a decoded Socket Mode envelope."
   def from_socket_mode(%{"type" => "events_api"} = env) do
     event = as_map(dig(env, ["payload", "event"]))

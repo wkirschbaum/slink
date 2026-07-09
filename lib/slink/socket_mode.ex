@@ -35,6 +35,20 @@ defmodule Slink.SocketMode do
       (NAT timeout, network partition). Slack pings every few seconds, so a
       quiet-but-healthy link never trips this. Milliseconds (or `:infinity` to
       disable); defaults to 2 minutes.
+
+  ## Multiple workspaces
+
+  Run one client per workspace — each dials out with its own tokens and stamps
+  its own `:bot_token` into the handler context, so a single `MyBot` serves them
+  all. Give each a distinct `:name`:
+
+      for w <- MyApp.workspaces() do
+        {Slink.SocketMode,
+         name: {:global, {MyBot, w.team_id}},
+         module: MyBot,
+         app_token: w.app_token,
+         bot_token: w.bot_token}
+      end
   """
 
   use GenServer
@@ -51,6 +65,16 @@ defmodule Slink.SocketMode do
       nil -> GenServer.start_link(__MODULE__, opts)
       name -> GenServer.start_link(__MODULE__, opts, name: name)
     end
+  end
+
+  # Key the child id off `:name` so running one client per workspace under a
+  # single supervisor doesn't collide on the default `id: __MODULE__`. Give each
+  # a distinct `:name` (see *Multiple workspaces*) and their ids differ too.
+  def child_spec(opts) do
+    %{
+      id: Keyword.get(opts, :name, __MODULE__),
+      start: {__MODULE__, :start_link, [opts]}
+    }
   end
 
   @impl true
