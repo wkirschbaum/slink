@@ -135,7 +135,9 @@ defmodule Slink do
       end
 
   The channel and thread come from `context.event` (set by the dispatcher), so
-  no event argument is needed. Where the reply lands is controlled by `opts[:to]`:
+  no event argument is needed. This works the same for a `block_actions`
+  interaction (a button click): the reply lands on the message the button is on.
+  Where the reply lands is controlled by `opts[:to]`:
 
     * `:auto` (default) — **dynamic**: in the thread if the event is in one,
       otherwise inline in the channel.

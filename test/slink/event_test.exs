@@ -88,6 +88,52 @@ defmodule Slink.EventTest do
     end
   end
 
+  describe "thread helpers for block_actions interactions" do
+    defp interaction(message) do
+      Event.from_socket_mode(%{
+        "type" => "interactive",
+        "payload" => %{
+          "type" => "block_actions",
+          "channel" => %{"id" => "C1", "name" => "general"},
+          "message" => message
+        }
+      })
+    end
+
+    test "read the channel and thread from the clicked message, not payload['channel']" do
+      event = interaction(%{"ts" => "2.0", "thread_ts" => "1.0"})
+
+      # payload["channel"] is a map for block_actions — the accessor must dig in.
+      assert Event.channel(event) == "C1"
+      assert Event.ts(event) == "2.0"
+      assert Event.thread_ts(event) == "1.0"
+      assert Event.in_thread?(event)
+      assert Event.reply_thread(event) == "1.0"
+    end
+
+    test "a click on a top-level message is not in a thread; a reply starts one" do
+      event = interaction(%{"ts" => "2.0"})
+
+      refute Event.in_thread?(event)
+      assert Event.reply_thread(event) == "2.0"
+    end
+
+    test "fall back to the container when the message isn't present" do
+      event =
+        Event.from_socket_mode(%{
+          "type" => "interactive",
+          "payload" => %{
+            "type" => "block_actions",
+            "container" => %{"channel_id" => "C9", "message_ts" => "5.0", "thread_ts" => "4.0"}
+          }
+        })
+
+      assert Event.channel(event) == "C9"
+      assert Event.ts(event) == "5.0"
+      assert Event.thread_ts(event) == "4.0"
+    end
+  end
+
   describe "author and mention helpers" do
     defp msg(payload), do: %Event{payload: payload, raw: %{}, transport: :socket_mode}
 

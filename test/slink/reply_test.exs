@@ -116,6 +116,43 @@ defmodule Slink.ReplyTest do
     end
   end
 
+  describe "reply/3 to a block_actions interaction" do
+    defp click(channel, message) do
+      %Event{
+        type: :interactive,
+        kind: :interactive,
+        payload: %{
+          "type" => "block_actions",
+          "channel" => %{"id" => channel},
+          "message" => message
+        },
+        raw: %{},
+        transport: :socket_mode
+      }
+    end
+
+    test ":auto (default) threads a click made inside a thread" do
+      event = click("C-click-thread", %{"ts" => "2.0", "thread_ts" => "1.0"})
+      Slink.reply(context(event), "clicked")
+
+      assert_receive {:sent, %{channel: "C-click-thread", text: "clicked", thread_ts: "1.0"}},
+                     1_000
+    end
+
+    test ":auto (default) answers a click on a top-level message in the channel" do
+      event = click("C-click-inline", %{"ts" => "2.0"})
+      Slink.reply(context(event), "clicked")
+      assert_receive {:sent, %{channel: "C-click-inline", text: "clicked"} = params}, 1_000
+      refute Map.has_key?(params, :thread_ts)
+    end
+
+    test ":thread forces a thread on a click on a top-level message" do
+      event = click("C-click-force", %{"ts" => "2.0"})
+      Slink.reply(context(event), "clicked", to: :thread)
+      assert_receive {:sent, %{channel: "C-click-force", thread_ts: "2.0"}}, 1_000
+    end
+  end
+
   describe "handler return values (via Dispatcher)" do
     # Dispatcher embeds the event into the context, so pass a context without one.
     defp bare_context, do: %Context{transport: :socket_mode, bot_token: "xoxb"}

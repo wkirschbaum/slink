@@ -53,8 +53,16 @@ defmodule Slink.Event do
   def normalize_type(nil), do: nil
   def normalize_type(type) when is_binary(type), do: Map.get(@type_map, type, type)
 
-  @doc "The channel the event happened in, or `nil`."
+  @doc """
+  The channel the event happened in, or `nil`.
+
+  For `block_actions` interactions the channel is nested (and `payload["channel"]`
+  is a map), so it's read from the interaction's `channel`/`container` instead.
+  """
   @spec channel(t()) :: String.t() | nil
+  def channel(%__MODULE__{kind: :interactive, payload: payload}),
+    do: get_in(payload, ["channel", "id"]) || get_in(payload, ["container", "channel_id"])
+
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
   @doc "The event's text, or an empty string."
@@ -109,16 +117,29 @@ defmodule Slink.Event do
     |> String.trim()
   end
 
-  @doc "The event's own message timestamp (`ts`), or `nil`."
+  @doc """
+  The event's own message timestamp (`ts`), or `nil`.
+
+  For `block_actions` interactions this is the `ts` of the message the component
+  is on (from the interaction's `message`/`container`).
+  """
   @spec ts(t()) :: String.t() | nil
+  def ts(%__MODULE__{kind: :interactive, payload: payload}),
+    do: get_in(payload, ["message", "ts"]) || get_in(payload, ["container", "message_ts"])
+
   def ts(%__MODULE__{payload: payload}), do: payload["ts"]
 
   @doc """
   The thread this event belongs to, or `nil` if it's not in a thread.
 
-  This is Slack's `thread_ts` — the `ts` of the thread's root message.
+  This is Slack's `thread_ts` — the `ts` of the thread's root message. For
+  `block_actions` interactions it's read from the message the component is on, so
+  a click in a thread threads and a click on a top-level message does not.
   """
   @spec thread_ts(t()) :: String.t() | nil
+  def thread_ts(%__MODULE__{kind: :interactive, payload: payload}),
+    do: get_in(payload, ["message", "thread_ts"]) || get_in(payload, ["container", "thread_ts"])
+
   def thread_ts(%__MODULE__{payload: payload}), do: payload["thread_ts"]
 
   @doc "Whether this event happened inside a thread."
