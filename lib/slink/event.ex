@@ -65,6 +65,10 @@ defmodule Slink.Event do
 
   def channel(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["channel_id"]
 
+  def channel(%__MODULE__{type: type, payload: payload})
+      when type in [:reaction_added, :reaction_removed],
+      do: get_in(payload, ["item", "channel"])
+
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
   @doc "The event's text, or an empty string."
@@ -108,27 +112,57 @@ defmodule Slink.Event do
   def mentions?(%__MODULE__{} = event, user_id), do: user_id in mentions(event)
 
   @doc """
-  The text addressed to the bot: the event's text with a leading `<@…>` mention
-  stripped and trimmed.
+  The text addressed to the bot: the event's text with Slack's link/mention
+  markup reduced to the plain text a human typed, then trimmed.
 
-  For `app_mention` events the text starts with the bot mention, so this returns
-  just the instruction ("`@bot deploy now`" → "`deploy now`").
+  Slack wraps links and mentions in angle brackets — `<@U123|alice>` (user),
+  `<#C1|general>` (channel), `<!here>` (special), `<mailto:a@b.com|a@b.com>`,
+  `<https://x|label>` (url). Each is unwrapped so the command reads naturally: a
+  user/channel becomes its name, a `mailto:` becomes the bare address (so an
+  email address "picks up" as plain text), a url stays the url, and a bare
+  `<@U123>` — such as the bot's own mention at the start of an `app_mention` —
+  drops out. So "`@bot deploy now`" → "`deploy now`" and a linkified
+  "`@bot <mailto:a@b.com|a@b.com>`" → "`a@b.com`".
   """
   def command(%__MODULE__{} = event) do
     event
     |> text()
-    |> String.replace(~r/^\s*<@[^>]+>\s*/, "")
+    |> unwrap_markup()
     |> String.trim()
+  end
+
+  # Reduce each `<…>` Slack entity to its plain-text form (see command/1).
+  defp unwrap_markup(text) do
+    Regex.replace(~r/<([^<>]+)>/, text, fn _match, inner ->
+      {target, label} =
+        case String.split(inner, "|", parts: 2) do
+          [t, l] -> {t, l}
+          [t] -> {t, nil}
+        end
+
+      cond do
+        String.starts_with?(target, "mailto:") -> String.replace_prefix(target, "mailto:", "")
+        String.starts_with?(target, "@") -> label || ""
+        String.starts_with?(target, "#") -> label || ""
+        String.starts_with?(target, "!") -> label || String.replace_prefix(target, "!", "")
+        true -> target
+      end
+    end)
   end
 
   @doc """
   The event's own message timestamp (`ts`), or `nil`.
 
   For `block_actions` interactions this is the `ts` of the message the component
-  is on (from the interaction's `message`/`container`).
+  is on (from the interaction's `message`/`container`). For `reaction_added`/
+  `reaction_removed` it's the `ts` of the reacted-to item.
   """
   def ts(%__MODULE__{kind: :interactive, payload: payload}),
     do: get_in(payload, ["message", "ts"]) || get_in(payload, ["container", "message_ts"])
+
+  def ts(%__MODULE__{type: type, payload: payload})
+      when type in [:reaction_added, :reaction_removed],
+      do: get_in(payload, ["item", "ts"])
 
   def ts(%__MODULE__{payload: payload}), do: payload["ts"]
 

@@ -185,6 +185,46 @@ defmodule Slink.EventTest do
       # No leading mention: returned trimmed, unchanged otherwise.
       assert Event.command(msg(%{"text" => "just text"})) == "just text"
     end
+
+    test "command/1 unwraps a linkified email (mailto) to the bare address" do
+      email = "wilhelm.kirschbaum@highspeed.training"
+      assert Event.command(msg(%{"text" => "<@U0BOT> <mailto:#{email}|#{email}>"})) == email
+      assert Event.command(msg(%{"text" => "<mailto:#{email}>"})) == email
+    end
+
+    test "command/1 unwraps other Slack markup to plain text" do
+      # user/channel → their label; a labelless user mention drops out; url stays
+      assert Event.command(msg(%{"text" => "ping <@U9|alice> in <#C1|general>"})) ==
+               "ping alice in general"
+
+      assert Event.command(msg(%{"text" => "see <https://x.dev/docs|the docs>"})) ==
+               "see https://x.dev/docs"
+
+      assert Event.command(msg(%{"text" => "<@U0BOT> hi <@U9>"})) == "hi"
+    end
+  end
+
+  describe "reaction events" do
+    test "channel/1 and ts/1 read the reacted-to item" do
+      event =
+        Event.from_socket_mode(%{
+          "type" => "events_api",
+          "payload" => %{
+            "event" => %{
+              "type" => "reaction_added",
+              "user" => "U1",
+              "reaction" => "thumbsup",
+              "item" => %{"type" => "message", "channel" => "C9", "ts" => "3.0"}
+            }
+          }
+        })
+
+      assert event.type == :reaction_added
+      assert Event.channel(event) == "C9"
+      assert Event.ts(event) == "3.0"
+      # A reply threads on the reacted message (no thread_ts on the item).
+      assert Event.reply_thread(event) == "3.0"
+    end
   end
 
   describe "interactions surface their inner type" do

@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-09
+
+### Fixed
+
+- **`reply/3` to a reaction event no longer crashes.** `reaction_added` /
+  `reaction_removed` nest their target under `payload["item"]`, so
+  `Event.channel/1`, `ts/1` now read it there — previously a reply to a reaction
+  raised `ArgumentError` (no channel) and `working/3` was a no-op.
+
+### Changed
+
+- **`Event.command/1` unwraps Slack link markup to plain text.** A linkified
+  address (`<mailto:a@b.com|a@b.com>`) now comes through as the bare `a@b.com`,
+  and `<@U1|alice>` / `<#C1|general>` / `<https://x|label>` reduce to their
+  name/url — so the addressed text reads as a human typed it. A bare `<@U1>`
+  (e.g. the bot's own mention) still drops out.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added
@@ -61,5 +78,6 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
+[0.2.1]: https://github.com/wkirschbaum/slink/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/wkirschbaum/slink/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wkirschbaum/slink/releases/tag/v0.1.0
