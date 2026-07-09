@@ -49,7 +49,6 @@ defmodule Slink.Event do
   @type_map Map.new(@known_types, &{Atom.to_string(&1), &1})
 
   @doc "The atom for a known Slack `type` string, or the string itself if unknown."
-  @spec normalize_type(String.t() | nil) :: atom() | String.t() | nil
   def normalize_type(nil), do: nil
   def normalize_type(type) when is_binary(type), do: Map.get(@type_map, type, type)
 
@@ -59,18 +58,15 @@ defmodule Slink.Event do
   For `block_actions` interactions the channel is nested (and `payload["channel"]`
   is a map), so it's read from the interaction's `channel`/`container` instead.
   """
-  @spec channel(t()) :: String.t() | nil
   def channel(%__MODULE__{kind: :interactive, payload: payload}),
     do: get_in(payload, ["channel", "id"]) || get_in(payload, ["container", "channel_id"])
 
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
   @doc "The event's text, or an empty string."
-  @spec text(t()) :: String.t()
   def text(%__MODULE__{payload: payload}), do: payload["text"] || ""
 
   @doc "The user who produced the event (author of the message), or `nil`."
-  @spec user(t()) :: String.t() | nil
   def user(%__MODULE__{payload: payload}), do: payload["user"]
 
   # A Slack user mention in message text looks like `<@U0123ABCD>`, and sometimes
@@ -83,7 +79,6 @@ defmodule Slink.Event do
   This is the "someone @-mentioned the bot" signal. To see who *else* is
   mentioned in the text, use `mentions/1`.
   """
-  @spec mention?(t()) :: boolean()
   def mention?(%__MODULE__{type: type}), do: type == :app_mention
 
   @doc """
@@ -91,7 +86,6 @@ defmodule Slink.Event do
 
   Empty when nobody is mentioned.
   """
-  @spec mentions(t()) :: [String.t()]
   def mentions(%__MODULE__{} = event) do
     @mention_re
     |> Regex.scan(text(event), capture: :all_but_first)
@@ -99,7 +93,6 @@ defmodule Slink.Event do
   end
 
   @doc "Whether `user_id` is mentioned in the event's text."
-  @spec mentions?(t(), String.t()) :: boolean()
   def mentions?(%__MODULE__{} = event, user_id), do: user_id in mentions(event)
 
   @doc """
@@ -109,7 +102,6 @@ defmodule Slink.Event do
   For `app_mention` events the text starts with the bot mention, so this returns
   just the instruction ("`@bot deploy now`" → "`deploy now`").
   """
-  @spec command(t()) :: String.t()
   def command(%__MODULE__{} = event) do
     event
     |> text()
@@ -123,7 +115,6 @@ defmodule Slink.Event do
   For `block_actions` interactions this is the `ts` of the message the component
   is on (from the interaction's `message`/`container`).
   """
-  @spec ts(t()) :: String.t() | nil
   def ts(%__MODULE__{kind: :interactive, payload: payload}),
     do: get_in(payload, ["message", "ts"]) || get_in(payload, ["container", "message_ts"])
 
@@ -136,14 +127,12 @@ defmodule Slink.Event do
   `block_actions` interactions it's read from the message the component is on, so
   a click in a thread threads and a click on a top-level message does not.
   """
-  @spec thread_ts(t()) :: String.t() | nil
   def thread_ts(%__MODULE__{kind: :interactive, payload: payload}),
     do: get_in(payload, ["message", "thread_ts"]) || get_in(payload, ["container", "thread_ts"])
 
   def thread_ts(%__MODULE__{payload: payload}), do: payload["thread_ts"]
 
   @doc "Whether this event happened inside a thread."
-  @spec in_thread?(t()) :: boolean()
   def in_thread?(%__MODULE__{} = event), do: is_binary(thread_ts(event))
 
   @doc """
@@ -152,7 +141,6 @@ defmodule Slink.Event do
   Slack tags bot-authored messages with a `bot_id`. Handlers use this to skip
   the bot's own posts so an auto-reply never triggers itself in a loop.
   """
-  @spec from_bot?(t()) :: boolean()
   def from_bot?(%__MODULE__{payload: payload}), do: is_binary(payload["bot_id"])
 
   @doc """
@@ -161,11 +149,9 @@ defmodule Slink.Event do
   If the event is already in a thread, that thread; otherwise the event's own
   `ts`, so replying *starts* a thread on it. `nil` if there's no timestamp.
   """
-  @spec reply_thread(t()) :: String.t() | nil
   def reply_thread(%__MODULE__{} = event), do: thread_ts(event) || ts(event)
 
   @doc "Normalise a decoded Socket Mode envelope."
-  @spec from_socket_mode(map()) :: t()
   def from_socket_mode(%{"type" => "events_api"} = env) do
     event = get_in(env, ["payload", "event"]) || %{}
 
@@ -206,7 +192,6 @@ defmodule Slink.Event do
   end
 
   @doc "Normalise a decoded Events API HTTP body."
-  @spec from_http(map()) :: t()
   def from_http(%{"type" => "event_callback", "event" => event} = body) do
     %__MODULE__{
       type: normalize_type(event["type"]),

@@ -20,7 +20,6 @@ defmodule Slink.API do
 
   Pass an app-level token (`xapp-…`) with the `connections:write` scope.
   """
-  @spec open_connection(String.t()) :: {:ok, String.t()} | {:error, term()}
   def open_connection(app_token) do
     case call(app_token, "apps.connections.open", %{}) do
       {:ok, %{"url" => url}} -> {:ok, url}
@@ -33,8 +32,6 @@ defmodule Slink.API do
 
   `opts` is merged into the request body (e.g. `%{thread_ts: ..., blocks: ...}`).
   """
-  @spec post_message(String.t(), String.t(), String.t(), map()) ::
-          {:ok, map()} | {:error, term()}
   def post_message(bot_token, channel, text, opts \\ %{}) do
     call(bot_token, "chat.postMessage", Map.merge(%{channel: channel, text: text}, opts))
   end
@@ -43,15 +40,11 @@ defmodule Slink.API do
   Add an emoji reaction (`name`, no colons) to the message at `channel`/`timestamp`
   via `reactions.add`. Needs the `reactions:write` scope.
   """
-  @spec add_reaction(String.t(), String.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, term()}
   def add_reaction(bot_token, channel, timestamp, name) do
     call(bot_token, "reactions.add", %{channel: channel, timestamp: timestamp, name: name})
   end
 
   @doc "Remove a reaction added with `add_reaction/4`, via `reactions.remove`."
-  @spec remove_reaction(String.t(), String.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, term()}
   def remove_reaction(bot_token, channel, timestamp, name) do
     call(bot_token, "reactions.remove", %{channel: channel, timestamp: timestamp, name: name})
   end
@@ -60,7 +53,6 @@ defmodule Slink.API do
   Call any Web API method. Returns `{:ok, body}` when Slack replies `ok: true`,
   otherwise `{:error, reason}` (the Slack error string, or a transport error).
   """
-  @spec call(String.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def call(token, method, params) do
     req = Req.new(base_url: base_url(), auth: {:bearer, token})
 

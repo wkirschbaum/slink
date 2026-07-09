@@ -20,14 +20,12 @@ defmodule Slink.Rate do
   alias Slink.Rate.Channel
 
   @doc "Queue a `chat.postMessage` for `channel`, rate-limited per channel."
-  @spec post_message(String.t(), String.t(), String.t(), map()) :: :ok
   def post_message(bot_token, channel, text, opts \\ %{}) do
     params = Map.merge(%{channel: channel, text: text}, opts)
     enqueue(bot_token, channel, "chat.postMessage", params)
   end
 
   @doc "Queue any Web API `method` targeting `channel`, rate-limited per channel."
-  @spec enqueue(String.t(), String.t(), String.t(), map()) :: :ok
   def enqueue(bot_token, channel, method, params) do
     channel
     |> worker()

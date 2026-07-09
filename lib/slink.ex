@@ -71,7 +71,6 @@ defmodule Slink do
 
   `config` is any keyword list or map (e.g. from `Application.get_env/2`).
   """
-  @spec enabled?(keyword() | map()) :: boolean()
   def enabled?(config) do
     !!(config[:enabled] && config[:app_token] && config[:bot_token])
   end
@@ -113,7 +112,6 @@ defmodule Slink do
         send_message(context, Slink.Event.channel(event), "hi")
       end
   """
-  @spec send_message(context(), String.t(), String.t(), map()) :: :ok
   def send_message(%Slink.Context{bot_token: token}, channel, text, opts \\ %{}) do
     Slink.Rate.post_message(token, channel, text, opts)
   end
@@ -123,7 +121,6 @@ defmodule Slink do
 
   Delegates to `Slink.Event.in_thread?/1`.
   """
-  @spec in_thread?(Slink.Event.t()) :: boolean()
   defdelegate in_thread?(event), to: Slink.Event
 
   @doc """
@@ -152,7 +149,6 @@ defmodule Slink do
 
       reply(context, "deployed ✅", to: :channel, blocks: blocks)
   """
-  @spec reply(context(), String.t(), keyword()) :: :ok
   def reply(context, text, opts \\ [])
 
   def reply(%Slink.Context{event: %Slink.Event{} = event} = context, text, opts) do
@@ -211,7 +207,6 @@ defmodule Slink do
   Best-effort: reaction API errors are ignored so they never break the handler,
   and if the event has no message to react to, `fun` just runs inline.
   """
-  @spec working(context(), (-> result), keyword()) :: result when result: var
   def working(context, fun, opts \\ [])
 
   def working(%Slink.Context{event: %Slink.Event{} = event} = context, fun, opts)

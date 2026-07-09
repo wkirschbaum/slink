@@ -9,7 +9,6 @@ defmodule Slink.Dispatcher do
   event to Slack. Crash containment is the task's job — a handler that raises
   kills only its own (temporary) task; the transport keeps running.
   """
-  @spec async(module(), Slink.Event.t(), Slink.Context.t()) :: :ok
   def async(module, %Slink.Event{} = event, %Slink.Context{} = context) do
     :telemetry.execute(
       [:slink, :event, :received],
@@ -26,7 +25,6 @@ defmodule Slink.Dispatcher do
 
   # Runs the user's handler. Called from inside a task (see async/3), so there is
   # no rescue here: OTP logs and isolates a crashing handler.
-  @spec dispatch(module(), Slink.Event.t(), Slink.Context.t()) :: :ok
   def dispatch(module, %Slink.Event{} = event, %Slink.Context{} = context) do
     # `function_exported?/3` returns false for a module that hasn't been loaded
     # yet, and the handler is typically only referenced as a bare atom in config
