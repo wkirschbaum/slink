@@ -126,6 +126,20 @@ defmodule Slink.RateTest do
     assert [{"xoxb-queue-secret", _, _}] = :sys.get_state(pid).queue
   end
 
+  test "format_status also redacts the token from the last handled message" do
+    # OTP includes the last message in a crash report; an enqueue cast carries
+    # the token, so it must be redacted alongside the state.
+    status = %{
+      state: %{channel: "C1", queue: [], busy: false},
+      message: {:enqueue, {"xoxb-msg-secret", "chat.postMessage", %{text: "hi"}}}
+    }
+
+    formatted = Slink.Rate.Channel.format_status(status)
+
+    refute inspect(formatted, limit: :infinity) =~ "xoxb-msg-secret"
+    assert {:enqueue, {"[REDACTED]", "chat.postMessage", %{text: "hi"}}} = formatted.message
+  end
+
   test "bounds the queue under sustained backpressure, dropping oldest" do
     Application.put_env(:slink, :rate_max_queue, 3)
     # Freeze draining after the first send so the queue actually builds up.

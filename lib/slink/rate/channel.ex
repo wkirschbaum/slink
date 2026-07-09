@@ -19,20 +19,27 @@ defmodule Slink.Rate.Channel do
     {:ok, %{channel: channel, queue: [], busy: false}, idle_stop()}
   end
 
-  # Crash reports and :sys.get_status print the full state, and every queued
-  # request carries the bot token — keep tokens out of logs.
+  # Crash reports and :sys.get_status print the full state *and* the last message
+  # handled, and every queued/enqueued request carries the bot token — keep tokens
+  # out of logs. Both mappers are total so format_status itself never raises (which
+  # would fall back to printing the un-redacted state).
   @impl true
   def format_status(status) do
-    Map.replace_lazy(status, :state, fn state ->
-      %{
-        state
-        | queue:
-            Enum.map(state.queue, fn {_token, method, params} ->
-              {"[REDACTED]", method, params}
-            end)
-      }
-    end)
+    status
+    |> Map.replace_lazy(:state, &redact_state/1)
+    |> Map.replace_lazy(:message, &redact_message/1)
   end
+
+  defp redact_state(%{queue: queue} = state), do: %{state | queue: Enum.map(queue, &redact/1)}
+  defp redact_state(state), do: state
+
+  # The `:message` in a crash report is the last cast/call — an enqueue carries
+  # the token in its request tuple.
+  defp redact_message({:enqueue, request}), do: {:enqueue, redact(request)}
+  defp redact_message(message), do: message
+
+  defp redact({_token, method, params}), do: {"[REDACTED]", method, params}
+  defp redact(other), do: other
 
   @impl true
   def handle_cast({:enqueue, request}, state) do
