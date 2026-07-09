@@ -28,8 +28,33 @@ defmodule Slink.EventsApi.Plug do
   Options:
 
     * `:module` (required) — a module implementing the `Slink` behaviour.
-    * `:signing_secret` (required) — the app's Signing Secret, for request verification.
+    * `:signing_secret` (required) — the app's Signing Secret, for request
+      verification. A string, or a 0-arity function returning one (resolved per
+      request — see *Mounting in Phoenix*).
     * `:bot_token` — bot token (`xoxb-…`) passed to handlers for Web API calls.
+      A string or a 0-arity function.
+
+  ## Mounting in Phoenix
+
+  Two pitfalls when mounting inside a Phoenix app:
+
+    * **`forward` options are evaluated at compile time** in production, so
+      `System.fetch_env!/1` in the router would read the env var on the *build*
+      machine (or fail there). Pass functions instead — they're resolved per
+      request:
+
+          forward "/slack/events", to: Slink.EventsApi.Plug,
+            init_opts: [
+              module: MyBot,
+              signing_secret: fn -> System.fetch_env!("SLACK_SIGNING_SECRET") end,
+              bot_token: fn -> System.fetch_env!("SLACK_BOT_TOKEN") end
+            ]
+
+    * **The raw body must still be readable.** Signature verification hashes the
+      raw request body, but `Plug.Parsers` (in every generated endpoint) consumes
+      it before the router runs — mounted after it, every request 401s. Mount
+      this plug in `endpoint.ex` *before* `plug Plug.Parsers`, or run it as a
+      standalone listener (see above).
 
   ## Slash commands & interactivity
 
@@ -67,7 +92,7 @@ defmodule Slink.EventsApi.Plug do
   def call(conn, opts) do
     case read_body(conn, length: @max_body_bytes) do
       {:ok, body, conn} ->
-        if verified?(conn, body, opts.signing_secret) do
+        if verified?(conn, body, resolve(opts.signing_secret)) do
           respond(conn, body, opts)
         else
           conn |> send_resp(401, "invalid signature") |> halt()
@@ -93,7 +118,8 @@ defmodule Slink.EventsApi.Plug do
 
   defp respond_json(conn, body, opts) do
     case JSON.decode(body) do
-      {:ok, %{"type" => "url_verification", "challenge" => challenge}} ->
+      {:ok, %{"type" => "url_verification", "challenge" => challenge}}
+      when is_binary(challenge) ->
         conn
         |> put_resp_content_type("text/plain")
         |> send_resp(200, challenge)
@@ -111,7 +137,7 @@ defmodule Slink.EventsApi.Plug do
   # response into the reply (view_submission) or ACK now and dispatch off-process.
   defp handle(conn, params, opts, normalize) do
     event = normalize.(params)
-    context = %Slink.Context{transport: :http, bot_token: opts.bot_token}
+    context = %Slink.Context{transport: :http, bot_token: resolve(opts.bot_token)}
 
     if Dispatcher.sync_ack?(event) do
       ack_response(conn, Dispatcher.ack_result(opts.module, event, context))
@@ -133,6 +159,13 @@ defmodule Slink.EventsApi.Plug do
     |> send_resp(200, JSON.encode!(payload))
     |> halt()
   end
+
+  # :signing_secret / :bot_token may be a 0-arity function resolved per request:
+  # Phoenix `forward` evaluates init options at compile time in production, so a
+  # literal `System.fetch_env!/1` there reads the build machine's env. A
+  # function defers the read to runtime.
+  defp resolve(fun) when is_function(fun, 0), do: fun.()
+  defp resolve(value), do: value
 
   defp form?(conn) do
     case get_req_header(conn, "content-type") do

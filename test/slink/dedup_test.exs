@@ -76,4 +76,37 @@ defmodule Slink.DedupTest do
     assert_receive {:handled, "message", ^event_id}, 1_000
     refute_receive {:handled, "message", ^event_id}, 100
   end
+
+  defmodule OtherBot do
+    use Slink
+
+    @impl true
+    def handle_event(event, _context) do
+      send(:dedup_sink, {:other_handled, event.type, Slink.Event.event_id(event)})
+      :ok
+    end
+  end
+
+  test "the same event_id delivered to two different modules dispatches to both" do
+    # Two Slack apps in one VM can receive the same workspace event with the
+    # same event_id — dedup is per handler module, so neither swallows the
+    # other's delivery.
+    Process.register(self(), :dedup_sink)
+    event_id = id()
+
+    event = %Event{
+      type: "message",
+      payload: %{},
+      raw: %{"payload" => %{"event_id" => event_id}},
+      transport: :socket_mode
+    }
+
+    context = %Context{transport: :socket_mode, bot_token: nil}
+
+    Dispatcher.async(OnceBot, event, context)
+    Dispatcher.async(OtherBot, event, context)
+
+    assert_receive {:handled, "message", ^event_id}, 1_000
+    assert_receive {:other_handled, "message", ^event_id}, 1_000
+  end
 end

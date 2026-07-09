@@ -238,7 +238,7 @@ defmodule Slink do
   end
 
   @working_emoji "hourglass_flowing_sand"
-  @working_delay_ms 3_000
+  @working_delay_ms to_timeout(second: 3)
 
   @doc """
   Show a "working on it" indicator on the triggering message *only if* the work

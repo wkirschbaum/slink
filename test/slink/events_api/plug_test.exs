@@ -60,6 +60,34 @@ defmodule Slink.EventsApi.PlugTest do
     Slink.EventsApi.Plug.init(module: module, signing_secret: @secret, bot_token: "xoxb-test")
   end
 
+  # Reports the context so tests can assert on the resolved bot token.
+  defmodule ContextBot do
+    use Slink
+
+    @impl true
+    def handle_event(_event, context) do
+      send(:plug_test_sink, {:ctx, context})
+      :ok
+    end
+  end
+
+  test "accepts signing_secret and bot_token as 0-arity functions" do
+    # Phoenix `forward` evaluates init options at compile time in prod; functions
+    # defer the env read to runtime and are resolved per request.
+    opts =
+      Slink.EventsApi.Plug.init(
+        module: ContextBot,
+        signing_secret: fn -> @secret end,
+        bot_token: fn -> "xoxb-lazy" end
+      )
+
+    body = JSON.encode!(%{type: "event_callback", event: %{type: "app_mention"}})
+    conn = Slink.EventsApi.Plug.call(signed_conn(body), opts)
+
+    assert conn.status == 200
+    assert_receive {:ctx, %Slink.Context{bot_token: "xoxb-lazy"}}, 1_000
+  end
+
   test "answers the url_verification challenge" do
     body = JSON.encode!(%{type: "url_verification", challenge: "the-challenge"})
     conn = Slink.EventsApi.Plug.call(signed_conn(body), opts())

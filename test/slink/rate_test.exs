@@ -78,6 +78,36 @@ defmodule Slink.RateTest do
     assert log =~ "cannot encode"
   end
 
+  test "an idle channel worker stops itself; the next send starts a fresh one" do
+    Application.put_env(:slink, :rate_idle_stop_ms, 60)
+    on_exit(fn -> Application.delete_env(:slink, :rate_idle_stop_ms) end)
+
+    Slink.Rate.post_message("xoxb", "C-idle", "first")
+    assert_receive {:sent, _, _, %{text: "first"}}, 1_000
+
+    [{pid, _}] = Registry.lookup(Slink.Rate.Registry, "C-idle")
+    ref = Process.monitor(pid)
+
+    # Nothing queued or in flight → the worker exits normally after the idle
+    # period, and transient restart leaves it stopped.
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+
+    # Registry cleanup is asynchronous; wait for the name to actually clear so
+    # the next enqueue can't cast into the dead pid.
+    wait_until(fn -> Registry.lookup(Slink.Rate.Registry, "C-idle") == [] end)
+
+    Slink.Rate.post_message("xoxb", "C-idle", "second")
+    assert_receive {:sent, _, _, %{text: "second"}}, 1_000
+  end
+
+  defp wait_until(fun, attempts \\ 100) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition never became true")
+      true -> Process.sleep(10) && wait_until(fun, attempts - 1)
+    end
+  end
+
   test "bounds the queue under sustained backpressure, dropping oldest" do
     Application.put_env(:slink, :rate_max_queue, 3)
     # Freeze draining after the first send so the queue actually builds up.

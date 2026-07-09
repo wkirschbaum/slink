@@ -30,6 +30,11 @@ defmodule Slink.SocketMode do
     * `:verbose` — when `true`, log every incoming WebSocket frame at `:info`
       (raw text for text frames). Useful for debugging what Slack actually
       delivers. Defaults to `false`.
+    * `:idle_timeout_ms` — reconnect if no traffic (frames, pings, any TCP data)
+      arrives for this long, catching connections that died without a close
+      (NAT timeout, network partition). Slack pings every few seconds, so a
+      quiet-but-healthy link never trips this. Milliseconds (or `:infinity` to
+      disable); defaults to 2 minutes.
   """
 
   use GenServer
@@ -37,8 +42,9 @@ defmodule Slink.SocketMode do
 
   alias Slink.{API, Context, Dispatcher, Event}
 
-  @base_backoff 1_000
-  @max_backoff 30_000
+  @base_backoff to_timeout(second: 1)
+  @max_backoff to_timeout(second: 30)
+  @default_idle_timeout to_timeout(minute: 2)
 
   def start_link(opts) do
     case Keyword.get(opts, :name, __MODULE__) do
@@ -69,11 +75,15 @@ defmodule Slink.SocketMode do
       # response, before {:done} creates the websocket. Buffered here, then
       # decoded the moment the websocket exists. See handle_response/2.
       pending: "",
-      # consecutive-failure counter driving reconnect backoff; reset on connect.
-      backoff: 0
+      # consecutive-failure counter driving reconnect backoff; reset on hello.
+      backoff: 0,
+      # liveness watchdog: when the last traffic arrived, and how long silence
+      # may last before the connection is declared dead. See :idle_check.
+      idle_timeout: Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout),
+      last_activity: System.monotonic_time(:millisecond)
     }
 
-    {:ok, state, {:continue, :connect}}
+    {:ok, schedule_idle_check(state), {:continue, :connect}}
   end
 
   @impl true
@@ -82,15 +92,41 @@ defmodule Slink.SocketMode do
   end
 
   @impl true
-  def handle_info(:connect, state) do
+  def handle_info(:connect, %{conn: nil} = state) do
     {:noreply, connect(state)}
+  end
+
+  # A stray reconnect timer while already connected. Slack's `disconnect`
+  # message and the server's close frame can land in one batch, each scheduling
+  # a reconnect — honouring both would open a second connection and leak the
+  # first, so any :connect after the first has done its job is dropped.
+  def handle_info(:connect, state), do: {:noreply, state}
+
+  # Liveness watchdog: Slack pings every few seconds, so a connection with no
+  # traffic for idle_timeout is dead even if the TCP socket never errored
+  # (NAT timeout, network partition). Without this, a silently dropped
+  # connection would leave the bot deaf forever. `conn != nil` (rather than
+  # websocket) also catches an upgrade that black-holes before completing.
+  def handle_info(:idle_check, state) do
+    state =
+      if state.conn != nil and
+           System.monotonic_time(:millisecond) - state.last_activity > state.idle_timeout do
+        Logger.warning("Slink: no traffic for #{state.idle_timeout}ms; reconnecting")
+        reconnect(state)
+      else
+        state
+      end
+
+    {:noreply, schedule_idle_check(state)}
   end
 
   # Mint delivers transport messages (tcp/ssl) here.
   def handle_info(message, %{conn: conn} = state) when conn != nil do
     case Mint.WebSocket.stream(conn, message) do
       {:ok, conn, responses} ->
-        {:noreply, handle_responses(%{state | conn: conn}, responses)}
+        # Any traffic on our connection proves the link is alive.
+        state = %{state | conn: conn, last_activity: System.monotonic_time(:millisecond)}
+        {:noreply, handle_responses(state, responses)}
 
       {:error, conn, reason, _responses} ->
         Logger.warning("Slink socket stream error: #{inspect(reason)}")
@@ -127,7 +163,20 @@ defmodule Slink.SocketMode do
       {:ok, conn} ->
         case Mint.WebSocket.upgrade(ws_scheme, conn, path(uri), []) do
           {:ok, conn, ref} ->
-            %{state | conn: conn, request_ref: ref, status: nil, resp_headers: nil}
+            # pending is reset here, not just on disconnect: a reconnect that
+            # fires mid-batch can buffer trailing bytes from the *old*
+            # connection after the disconnect nulled it — decoding those with
+            # the new connection's websocket would corrupt its framing.
+            # last_activity restarts the idle clock for this attempt.
+            %{
+              state
+              | conn: conn,
+                request_ref: ref,
+                status: nil,
+                resp_headers: nil,
+                pending: "",
+                last_activity: System.monotonic_time(:millisecond)
+            }
 
           {:error, conn, reason} ->
             Logger.error("Slink: upgrade failed (#{inspect(reason)}), retrying")
@@ -186,6 +235,15 @@ defmodule Slink.SocketMode do
     half + :rand.uniform(half)
   end
 
+  # One repeating watchdog timer for the life of the process (see :idle_check).
+  # Checking at half the timeout bounds detection latency to ~1.5× the timeout.
+  defp schedule_idle_check(%{idle_timeout: :infinity} = state), do: state
+
+  defp schedule_idle_check(state) do
+    Process.send_after(self(), :idle_check, max(div(state.idle_timeout, 2), 50))
+    state
+  end
+
   defp safe_close(nil), do: :ok
   defp safe_close(conn), do: Mint.HTTP.close(conn)
 
@@ -213,10 +271,12 @@ defmodule Slink.SocketMode do
           module: state.module
         })
 
-        # Connected cleanly — reset the backoff so the next blip retries fast.
-        # Then flush any frame bytes that arrived before this {:done} (see the
-        # websocket: nil clause of handle_response/2 below).
-        state = %{state | conn: conn, websocket: websocket, backoff: 0}
+        # Flush any frame bytes that arrived before this {:done} (see the
+        # websocket: nil clause of handle_response/2 below). The backoff counter
+        # is deliberately NOT reset here but on hello: only Slack's app-level
+        # greeting proves the connection was accepted, so a handshake that
+        # succeeds and is immediately disconnected still backs off.
+        state = %{state | conn: conn, websocket: websocket}
         flush_pending(state)
 
       {:error, conn, reason} ->
@@ -303,7 +363,8 @@ defmodule Slink.SocketMode do
   defp handle_message(%{"type" => "hello"}, state) do
     Logger.debug("Slink: received hello")
     join_channels(state)
-    state
+    # Slack accepted the connection — the next blip may retry fast again.
+    %{state | backoff: 0}
   end
 
   defp handle_message(%{"type" => "disconnect", "reason" => reason}, state) do

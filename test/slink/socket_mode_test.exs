@@ -179,6 +179,40 @@ defmodule Slink.SocketModeTest do
     assert_receive {:fake_slack, :pong, "ping-payload"}, 15_000
   end
 
+  test "the idle watchdog reconnects a connection that went silent" do
+    # First connection: hello, then nothing — like a NAT-dropped socket that
+    # never errors. The watchdog must declare it dead; the reconnect then gets
+    # the normal frames and events flow again.
+    {:ok, url, server} =
+      FakeSlack.start(self(), first_frames: [{:text, JSON.encode!(%{"type" => "hello"})}])
+
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    capture_log(fn ->
+      start_client(url, idle_timeout_ms: 300)
+
+      assert_receive {:fake_slack, :connected}, 15_000
+      # Watchdog fires after ~300-450ms of silence and reconnects.
+      assert_receive {:fake_slack, :connected}, 15_000
+      assert_receive {:bot_event, %Slink.Event{type: :app_mention}, _context}, 15_000
+    end)
+  end
+
+  test "a stray :connect while connected does not open a second connection" do
+    {:ok, url, server} = FakeSlack.start(self())
+    on_exit(fn -> Process.exit(server, :normal) end)
+    pid = start_client(url)
+
+    assert_receive {:fake_slack, :connected}, 15_000
+
+    # A duplicate reconnect timer (disconnect message + close frame in one
+    # batch) must be ignored once connected — otherwise the old socket leaks.
+    send(pid, :connect)
+
+    refute_receive {:fake_slack, :connected}, 500
+    assert Process.alive?(pid)
+  end
+
   test "reconnects when Slack sends a disconnect message" do
     # Disconnect on the first connection, behave normally on the reconnect.
     {:ok, url, server} =

@@ -5,7 +5,8 @@ defmodule Slink.Dedup do
   Slack re-sends an event (same `event_id`) when it doesn't see a timely ACK —
   even though both transports ACK before the handler runs, a slow network or a
   restart can still produce duplicates. This keeps a short-lived set of seen
-  `event_id`s in ETS; `Slink.Dispatcher` consults it before dispatching.
+  keys (`{handler_module, event_id}`) in ETS; `Slink.Dispatcher` consults it
+  before dispatching.
 
   It's a `set` ETS table owned by this process but read/written directly by
   callers (so the dedup check never blocks on a GenServer). A periodic sweep
@@ -15,15 +16,19 @@ defmodule Slink.Dedup do
 
     * `config :slink, :dedup, true` — master switch (default `true`). When
       `false`, `seen?/1` always returns `false` and nothing is tracked.
-    * `config :slink, :dedup_ttl_ms, 60_000` — how long an id is remembered
-      (default 60s). Comfortably longer than Slack's retry schedule.
+    * `config :slink, :dedup_ttl_ms, 660_000` — how long a key is remembered
+      (default 11 minutes). Slack retries a failed delivery immediately, after
+      ~1 minute, and after ~5 minutes, so the default covers the whole schedule
+      with margin.
   """
 
   use GenServer
 
   @table __MODULE__
-  @default_ttl_ms 60_000
-  @sweep_ms 30_000
+  # Slack's last retry lands ~6 minutes after the original delivery; remember
+  # keys for 11 minutes so every retry in the schedule is still recognised.
+  @default_ttl_ms to_timeout(minute: 11)
+  @sweep_ms to_timeout(second: 30)
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -37,7 +42,7 @@ defmodule Slink.Dedup do
   dedup process fails open — never silently swallowing real events.
   """
   def seen?(key) do
-    # Event ids are globally unique, so an id we've stored can only be a retry —
+    # Event ids are unique per event, so a key we've stored can only be a retry —
     # `insert_new` returning false *is* the "seen before" answer. The stored
     # expiry is read only by the sweep, which is all the TTL is for (bounding
     # memory); a genuine retry after the TTL is vanishingly unlikely.

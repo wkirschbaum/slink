@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-09
+
+Deep-review release: connection-lifecycle hardening for Socket Mode, dedup
+correctness, resource bounds, and Phoenix deployment fixes.
+
+### Added
+
+- **Socket Mode liveness watchdog** (`:idle_timeout_ms`, default 2 minutes).
+  A connection that dies without a close — NAT timeout, network partition —
+  previously left the client believing it was connected *forever*: the bot went
+  permanently deaf until the process was restarted. Slack pings every few
+  seconds, so silence now triggers a reconnect. Pass `:infinity` to disable.
+- **The Events API plug accepts `signing_secret`/`bot_token` as 0-arity
+  functions**, resolved per request. Phoenix's `forward` evaluates init options
+  at compile time in production, so a literal `System.fetch_env!/1` in the
+  router read the *build* machine's env (or failed the build). New *Mounting in
+  Phoenix* docs also cover the `Plug.Parsers` raw-body pitfall (mounted after
+  parsers, signature verification always 401s).
+- `config :slink, :rate_idle_stop_ms, 600_000` — an idle channel rate-limit
+  worker now stops itself (default 10 min). Previously every channel ever
+  posted to kept a worker process alive for the node's lifetime.
+
+### Fixed
+
+- **Event dedup now covers Slack's real retry schedule.** Slack retries a
+  failed delivery immediately, after ~1 minute, and after ~5 minutes; the old
+  60s default TTL only caught the first retry, so later retries double-fired
+  handlers. Default `:dedup_ttl_ms` is now 11 minutes.
+- **Event dedup is keyed per handler module.** Two bots in one VM (two Slack
+  apps receiving the same workspace event, which carries the same `event_id`)
+  shared one dedup namespace — whichever dispatched first silently swallowed
+  the other's delivery.
+- **A duplicate reconnect timer no longer opens a second connection.** Slack
+  sends `disconnect` and then closes the socket; when both arrived in one batch
+  each scheduled a reconnect, and the second `:connect` opened a parallel
+  connection while leaking the first. A `:connect` while connected is now
+  ignored.
+- **Stale bytes can no longer leak across reconnects.** A reconnect firing
+  mid-batch could buffer trailing frame bytes from the old connection and later
+  decode them with the *new* connection's WebSocket state, corrupting its
+  framing. The buffer is now cleared when a new connection starts.
+- **Reconnect backoff resets on Slack's `hello`, not on the WebSocket
+  handshake** — an accept-then-immediately-disconnect loop (e.g. too many
+  connections) now backs off instead of retrying at full speed forever.
+- The `url_verification` challenge is echoed only when it's a string.
+
 ## [0.2.2] - 2026-07-09
 
 Robustness release: no user action, handler return value, or malformed Slack
@@ -114,6 +160,7 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
+[0.3.0]: https://github.com/wkirschbaum/slink/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/wkirschbaum/slink/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/wkirschbaum/slink/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/wkirschbaum/slink/compare/v0.1.0...v0.2.0

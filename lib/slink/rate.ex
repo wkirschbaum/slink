@@ -15,6 +15,11 @@ defmodule Slink.Rate do
 
     * `config :slink, :rate_interval_ms, 1_000` — minimum gap between sends on a
       single channel (default 1000ms).
+    * `config :slink, :rate_max_queue, 1_000` — per-channel queue cap; beyond it
+      the oldest queued messages are dropped (default 1000).
+    * `config :slink, :rate_idle_stop_ms, 600_000` — a channel worker with
+      nothing to do for this long stops itself (default 10 minutes), so posting
+      to many channels doesn't accumulate idle workers.
   """
 
   require Logger

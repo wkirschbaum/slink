@@ -19,7 +19,7 @@ defmodule Slink.Dispatcher do
   def async(module, %Event{} = event, %Slink.Context{} = context) do
     emit_received(module, event, context)
 
-    if duplicate?(event) do
+    if duplicate?(module, event) do
       Logger.debug("Slink: dropping duplicate delivery of #{Event.event_id(event)}")
     else
       Task.Supervisor.start_child(Slink.TaskSupervisor, fn ->
@@ -117,9 +117,12 @@ defmodule Slink.Dispatcher do
     end
   end
 
-  defp duplicate?(%Event{} = event) do
+  # Keyed on {module, event_id}, not the id alone: the same workspace event
+  # delivered to two different Slack apps in one VM carries the same event_id,
+  # and one bot's delivery must not swallow the other's.
+  defp duplicate?(module, %Event{} = event) do
     case Event.event_id(event) do
-      id when is_binary(id) -> Slink.Dedup.seen?(id)
+      id when is_binary(id) -> Slink.Dedup.seen?({module, id})
       _ -> false
     end
   end
