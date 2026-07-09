@@ -26,7 +26,10 @@ frame can take a transport down.
   event construction run in the socket process, that raise dropped the
   connection. All parsing and accessors are now total — a wrong-shaped payload
   yields `nil`/empty defaults instead of raising — and the socket wraps
-  per-message handling as a final backstop.
+  per-message handling as a final backstop. That backstop also no longer reverts
+  a sent ACK's connection state: a dispatch that raised *after* the envelope was
+  ACKed would otherwise unwind to the pre-ACK state and leave the socket on a
+  stale Mint connection, so the post-ACK dispatch is contained on its own.
 - **A bad reply body no longer crashes a channel's rate-limit worker.** If a
   handler's reply carried a body the Web API client couldn't encode, the raise
   killed the per-channel `Slink.Rate.Channel` worker and dropped everything else

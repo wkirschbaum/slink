@@ -320,14 +320,24 @@ defmodule Slink.SocketMode do
       # now (bounded and isolated by ack_result/3) and ACK with its payload.
       ack(state, id, Dispatcher.ack_result(state.module, event, context))
     else
-      # ACK first (within Slack's 3s window), then dispatch off-process.
+      # ACK first (within Slack's 3s window), then dispatch off-process. The ACK
+      # advances the Mint connection state, so a raise from dispatch must not
+      # unwind past it: `safe_handle_message/2`'s rescue would return the pre-ACK
+      # state and leave the socket on a stale connection. Contain it here so the
+      # post-ACK state is always what we return.
       state = ack(state, id)
-      Dispatcher.async(state.module, event, context)
+      safe_dispatch(state.module, event, context)
       state
     end
   end
 
   defp handle_message(_message, state), do: state
+
+  defp safe_dispatch(module, event, context) do
+    Dispatcher.async(module, event, context)
+  rescue
+    e -> Logger.error("Slink: dropping a dispatch that raised after ack: #{inspect(e)}")
+  end
 
   defp join_channels(%{join: []}), do: :ok
 
