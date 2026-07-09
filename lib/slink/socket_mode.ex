@@ -91,6 +91,19 @@ defmodule Slink.SocketMode do
     {:noreply, connect(state)}
   end
 
+  # Crash reports and :sys.get_status print the full state — keep the bot token
+  # out of logs. (The open_connection closure captures the app token too, but
+  # closures inspect opaquely, so it never prints.)
+  @impl true
+  def format_status(status) do
+    Map.replace_lazy(status, :state, fn state ->
+      %{state | bot_token: redact(state.bot_token)}
+    end)
+  end
+
+  defp redact(nil), do: nil
+  defp redact(_token), do: "[REDACTED]"
+
   @impl true
   def handle_info(:connect, %{conn: nil} = state) do
     {:noreply, connect(state)}

@@ -26,6 +26,19 @@ correctness, resource bounds, and Phoenix deployment fixes.
   worker now stops itself (default 10 min). Previously every channel ever
   posted to kept a worker process alive for the node's lifetime.
 
+### Security
+
+- **Bot tokens no longer appear in crash reports.** OTP prints a GenServer's
+  full state when it terminates abnormally (and in `:sys.get_status`); the
+  Socket Mode client's state and every queued rate-limiter request carry the
+  bot token, so any crash wrote tokens to logs. Both now implement
+  `format_status/1` and redact them.
+- **Signature verification fails closed on a misconfigured signing secret.**
+  A secret that resolves to `nil`, `""`, or a non-string (e.g. a function
+  reading a missing env var) now rejects with 401 instead of crashing into a
+  500 — and an empty secret is never accepted, since an empty-key HMAC is
+  computable by anyone.
+
 ### Fixed
 
 - **Event dedup now covers Slack's real retry schedule.** Slack retries a

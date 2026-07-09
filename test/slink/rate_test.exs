@@ -108,6 +108,24 @@ defmodule Slink.RateTest do
     end
   end
 
+  test "crash-report formatting redacts bot tokens from queued requests" do
+    # Freeze draining so a request actually sits in the queue with its token.
+    Application.put_env(:slink, :rate_interval_ms, 60_000)
+
+    Slink.Rate.post_message("xoxb-queue-secret", "C-redact", "one")
+    Slink.Rate.post_message("xoxb-queue-secret", "C-redact", "two")
+
+    [{pid, _}] = Registry.lookup(Slink.Rate.Registry, "C-redact")
+
+    # :sys.get_status renders the state the way a crash report would.
+    formatted = inspect(:sys.get_status(pid), limit: :infinity)
+    refute formatted =~ "xoxb-queue-secret"
+    assert formatted =~ "[REDACTED]"
+
+    # The real queue still holds the actual token for sending.
+    assert [{"xoxb-queue-secret", _, _}] = :sys.get_state(pid).queue
+  end
+
   test "bounds the queue under sustained backpressure, dropping oldest" do
     Application.put_env(:slink, :rate_max_queue, 3)
     # Freeze draining after the first send so the queue actually builds up.

@@ -72,6 +72,7 @@ defmodule Slink.EventsApi.Plug do
 
   @behaviour Plug
   import Plug.Conn
+  require Logger
 
   alias Slink.{Dispatcher, Event}
 
@@ -195,7 +196,7 @@ defmodule Slink.EventsApi.Plug do
 
   defp with_retry(_conn, params), do: params
 
-  defp verified?(conn, body, secret) do
+  defp verified?(conn, body, secret) when is_binary(secret) and secret != "" do
     with [timestamp] <- get_req_header(conn, "x-slack-request-timestamp"),
          [signature] <- get_req_header(conn, "x-slack-signature"),
          true <- fresh?(timestamp) do
@@ -209,6 +210,15 @@ defmodule Slink.EventsApi.Plug do
     else
       _ -> false
     end
+  end
+
+  # Fail closed on a misconfigured secret (nil, empty, or a function that
+  # returned something else): reject cleanly rather than crash into a 500 —
+  # and never accept, since an empty-key HMAC is computable by anyone. The
+  # value itself is deliberately not logged.
+  defp verified?(_conn, _body, _secret) do
+    Logger.warning("Slink: signing_secret is not a non-empty string; rejecting request")
+    false
   end
 
   defp fresh?(timestamp) do

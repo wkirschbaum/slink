@@ -179,6 +179,20 @@ defmodule Slink.SocketModeTest do
     assert_receive {:fake_slack, :pong, "ping-payload"}, 15_000
   end
 
+  test "crash-report formatting redacts the bot token from the state" do
+    {:ok, url, server} = FakeSlack.start(self())
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    pid = start_client(url, bot_token: "xoxb-super-secret")
+    assert_receive {:fake_slack, :connected}, 15_000
+
+    # :sys.get_status renders the state the way a crash report would — the
+    # token must not appear in it (format_status/1 redacts it).
+    formatted = inspect(:sys.get_status(pid), limit: :infinity)
+    refute formatted =~ "xoxb-super-secret"
+    assert formatted =~ "[REDACTED]"
+  end
+
   test "the idle watchdog reconnects a connection that went silent" do
     # First connection: hello, then nothing — like a NAT-dropped socket that
     # never errors. The watchdog must declare it dead; the reconnect then gets

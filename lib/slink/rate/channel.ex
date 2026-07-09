@@ -19,6 +19,21 @@ defmodule Slink.Rate.Channel do
     {:ok, %{channel: channel, queue: [], busy: false}, idle_stop()}
   end
 
+  # Crash reports and :sys.get_status print the full state, and every queued
+  # request carries the bot token — keep tokens out of logs.
+  @impl true
+  def format_status(status) do
+    Map.replace_lazy(status, :state, fn state ->
+      %{
+        state
+        | queue:
+            Enum.map(state.queue, fn {_token, method, params} ->
+              {"[REDACTED]", method, params}
+            end)
+      }
+    end)
+  end
+
   @impl true
   def handle_cast({:enqueue, request}, state) do
     {:noreply, pump(%{state | queue: bounded(state.queue ++ [request], state.channel)}),

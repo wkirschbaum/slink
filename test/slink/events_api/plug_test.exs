@@ -1,5 +1,6 @@
 defmodule Slink.EventsApi.PlugTest do
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
   import Plug.Test
   import Plug.Conn
 
@@ -86,6 +87,20 @@ defmodule Slink.EventsApi.PlugTest do
 
     assert conn.status == 200
     assert_receive {:ctx, %Slink.Context{bot_token: "xoxb-lazy"}}, 1_000
+  end
+
+  test "fails closed (401, not 500) when the signing secret is misconfigured" do
+    # e.g. a secret function reading a missing env var and returning nil. An
+    # empty-key HMAC would also be computable by anyone — never accept it.
+    for bad_secret <- [fn -> nil end, "", nil] do
+      opts = Slink.EventsApi.Plug.init(module: TestBot, signing_secret: bad_secret)
+      body = JSON.encode!(%{type: "event_callback", event: %{type: "app_mention"}})
+
+      capture_log(fn ->
+        conn = Slink.EventsApi.Plug.call(signed_conn(body), opts)
+        assert conn.status == 401
+      end)
+    end
   end
 
   test "answers the url_verification challenge" do
