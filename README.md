@@ -155,21 +155,42 @@ The same `handle_event/2` handles slash commands and interactive components, ove
 either transport. Match on the event `type`; reply the same way you always do.
 
 ```elixir
+def handle_event(%Event{type: :app_mention} = _event, context) do
+  # Reply with a button: any reply can carry Block Kit `blocks`. `action_id`
+  # identifies the button when it's clicked; `value` rides along with the click.
+  reply(context, "Ready to deploy?",
+    blocks: [
+      %{
+        type: "actions",
+        elements: [
+          %{
+            type: "button",
+            action_id: "deploy",
+            text: %{type: "plain_text", text: "Deploy"},
+            value: "prod"
+          }
+        ]
+      }
+    ]
+  )
+end
+
+def handle_event(%Event{type: :block_actions} = event, context) do
+  # The click arrives as its own event. reply/3 posts on the message the button
+  # is on; action_id/1 says which button, action_value/1 its value.
+  reply(context, "Deploying #{Event.action_value(event)} 🚀")
+end
+
 def handle_event(%Event{type: :slash_commands} = event, context) do
   # Slash commands reply through their response_url — reply/3 handles that.
   # to: :ephemeral (default) shows only the invoker; to: :channel posts publicly.
   reply(context, "running `#{Event.text(event)}`…", to: :channel)
 end
 
-def handle_event(%Event{type: :block_actions} = event, context) do
-  # A button/menu click. reply/3 posts on the message the component is on.
-  reply(context, "you picked #{Event.action_value(event)}")
-end
-
 def handle_event(%Event{type: :shortcut} = _event, context) do
   # Open a modal. Uses the event's trigger_id (valid ~3s), so open promptly.
+  # open_modal/2 returns :ok | {:error, reason}, so it ends the handler cleanly.
   open_modal(context, my_view())
-  :ok
 end
 
 def handle_event(%Event{type: :view_submission} = event, _context) do

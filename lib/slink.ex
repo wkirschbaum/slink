@@ -224,17 +224,26 @@ defmodule Slink do
   Open a modal in response to the interaction or slash command in `context`
   (imported by `use Slink`).
 
+  Returns `:ok` on success, or `{:error, reason}` if the open fails — the same
+  `:ok | {:error, reason}` shape the standard library uses for a side effect
+  that can fail. `:ok` is a valid `t:result/0`, so a handler can end with it like
+  `reply/3`; a failed open still doesn't break the handler (the dispatcher
+  ignores a non-`{:reply, …}` return), but you can match on it if you care.
+
   Uses the event's `trigger_id`, which Slack honours for only ~3 seconds, so open
-  promptly. `view` is a Block Kit view map. Returns `Slink.API.open_view/3`'s
-  result. For follow-ups use `Slink.API.update_view/3` and `Slink.API.push_view/3`.
+  promptly. `view` is a Block Kit view map. When you need the opened view's id
+  (e.g. to `update_view/3` / `push_view/3` it later), call `Slink.API.open_view/3`
+  directly — it returns the full `{:ok, response}`.
 
       def handle_event(%Slink.Event{type: :shortcut} = _event, context) do
         open_modal(context, my_view())
-        :ok
       end
   """
   def open_modal(%Slink.Context{bot_token: token, event: %Slink.Event{} = event}, view) do
-    Slink.API.open_view(token, Slink.Event.trigger_id(event), view)
+    case Slink.API.open_view(token, Slink.Event.trigger_id(event), view) do
+      {:ok, _response} -> :ok
+      {:error, _reason} = error -> error
+    end
   end
 
   @working_emoji "hourglass_flowing_sand"

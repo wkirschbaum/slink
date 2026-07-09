@@ -63,7 +63,7 @@ defmodule Slink.SlashTest do
 
     context = %Context{transport: :socket_mode, bot_token: "xoxb", event: event}
 
-    assert {:ok, %{"view" => %{"id" => "V1"}}} = Slink.open_modal(context, %{"type" => "modal"})
+    assert :ok = Slink.open_modal(context, %{"type" => "modal"})
     assert_receive {:api_request, "/views.open", %{"trigger_id" => "T-42"}}, 1_000
   end
 
