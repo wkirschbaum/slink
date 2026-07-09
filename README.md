@@ -35,7 +35,7 @@ existing options each leave a gap:
 ```elixir
 def deps do
   [
-    {:slink, "~> 0.2"}
+    {:slink, "~> 0.3"}
   ]
 end
 ```
@@ -215,13 +215,16 @@ Bandit.start_link(
 )
 ```
 
-…or mount it in an existing Plug/Phoenix router:
+…or mount it in an existing Plug/Phoenix router. Pass the secrets as functions —
+Phoenix evaluates `forward` options at compile time in production — and mount it
+where the raw body is still readable (before `Plug.Parsers`; see the
+`Slink.EventsApi.Plug` docs):
 
 ```elixir
 forward "/slack/events", to: Slink.EventsApi.Plug,
   init_opts: [module: MyBot,
-              signing_secret: System.fetch_env!("SLACK_SIGNING_SECRET"),
-              bot_token: System.fetch_env!("SLACK_BOT_TOKEN")]
+              signing_secret: fn -> System.fetch_env!("SLACK_SIGNING_SECRET") end,
+              bot_token: fn -> System.fetch_env!("SLACK_BOT_TOKEN") end]
 ```
 
 Then in the app's manifest/settings: set `"socket_mode_enabled": false`, add your
