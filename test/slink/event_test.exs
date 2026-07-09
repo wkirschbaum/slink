@@ -364,4 +364,97 @@ defmodule Slink.EventTest do
       assert Event.retry_attempt(retried) == 2
     end
   end
+
+  describe "totality: malformed payloads never raise" do
+    # Slack always sends well-formed objects, but a malformed or hostile frame
+    # can put a string/list/null where a map is expected. None of the parsing or
+    # accessors may raise — much of this runs in a transport process where a raise
+    # drops the connection.
+
+    test "from_socket_mode tolerates a non-map payload for every envelope kind" do
+      for type <- ["events_api", "slash_commands", "interactive"],
+          bad <- ["a string", 123, nil, ["a", "list"]] do
+        env = %{"type" => type, "envelope_id" => "e", "payload" => bad}
+        event = Event.from_socket_mode(env)
+        assert is_map(event.payload)
+        # And the accessors on the resulting event stay safe.
+        assert Event.channel(event) == nil or is_binary(Event.channel(event))
+        assert Event.text(event) == ""
+        assert Event.event_id(event) == nil
+        assert Event.actions(event) == []
+      end
+    end
+
+    test "from_socket_mode tolerates an events_api event that isn't a map" do
+      env = %{
+        "type" => "events_api",
+        "envelope_id" => "e",
+        "payload" => %{"type" => "event_callback", "event" => "not a map"}
+      }
+
+      event = Event.from_socket_mode(env)
+      assert event.payload == %{}
+      assert Event.channel(event) == nil
+    end
+
+    test "from_http and from_http_form tolerate non-map bodies" do
+      for bad <- ["str", 123, ["list"], nil] do
+        assert %Event{payload: %{}} = Event.from_http(bad)
+        assert %Event{payload: %{}} = Event.from_http_form(bad)
+      end
+    end
+
+    test "nested accessors return nil when Slack's nested maps are the wrong shape" do
+      # An interactive payload where `channel`, `message`, `user`, `view` are all
+      # strings instead of the maps Slack normally sends.
+      env = %{
+        "type" => "interactive",
+        "envelope_id" => "e",
+        "payload" => %{
+          "type" => "block_actions",
+          "channel" => "should-be-a-map",
+          "message" => "should-be-a-map",
+          "user" => "should-be-a-map",
+          "view" => "should-be-a-map",
+          "actions" => "should-be-a-list"
+        }
+      }
+
+      event = Event.from_socket_mode(env)
+
+      assert Event.channel(event) == nil
+      assert Event.ts(event) == nil
+      assert Event.thread_ts(event) == nil
+      assert Event.user(event) == nil
+      assert Event.callback_id(event) == nil
+      assert Event.view_values(event) == %{}
+      assert Event.actions(event) == []
+      assert Event.action_id(event) == nil
+      assert Event.action_value(event) == nil
+    end
+
+    test "text/mentions/command tolerate a non-string text field" do
+      event =
+        Event.from_socket_mode(%{
+          "type" => "events_api",
+          "payload" => %{"event" => %{"text" => 123}}
+        })
+
+      assert Event.text(event) == ""
+      assert Event.mentions(event) == []
+      assert Event.command(event) == ""
+    end
+
+    test "action_value tolerates non-map action entries" do
+      env = %{
+        "type" => "interactive",
+        "envelope_id" => "e",
+        "payload" => %{"type" => "block_actions", "actions" => ["not", "maps"]}
+      }
+
+      event = Event.from_socket_mode(env)
+      assert Event.action_value(event) == nil
+      assert Event.action_id(event) == nil
+    end
+  end
 end

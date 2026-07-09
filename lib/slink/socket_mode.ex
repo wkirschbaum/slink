@@ -274,7 +274,7 @@ defmodule Slink.SocketMode do
     # A malformed frame from Slack must not take down the connection — skip it.
     case JSON.decode(text) do
       {:ok, message} ->
-        handle_message(message, state)
+        safe_handle_message(message, state)
 
       {:error, _reason} ->
         Logger.warning("Slink: ignoring undecodable text frame")
@@ -285,6 +285,18 @@ defmodule Slink.SocketMode do
   defp dispatch_frame({:ping, data}, state), do: send_frame(state, {:pong, data})
   defp dispatch_frame({:close, _code, _reason}, state), do: reconnect(state)
   defp dispatch_frame(_frame, state), do: state
+
+  # Last line of defence: handling one message must never crash the socket. The
+  # event path is built to be total (see `Slink.Event`, `Slink.Dispatcher`), so
+  # this rescue should be unreachable — it's here so an unforeseen shape drops a
+  # single message rather than the whole connection.
+  defp safe_handle_message(message, state) do
+    handle_message(message, state)
+  rescue
+    e ->
+      Logger.error("Slink: dropping a message that raised while handling: #{inspect(e)}")
+      state
+  end
 
   ## Slack Socket Mode protocol messages
 
@@ -360,6 +372,8 @@ defmodule Slink.SocketMode do
     end
   end
 
-  # We only ever encode our own ACK map (`%{envelope_id: binary}`), which cannot fail.
+  # Encodes an ACK frame. The envelope is our own (`%{envelope_id: binary}`), and
+  # any handler-supplied `payload` was already checked for encodability by
+  # `Dispatcher.ack_result/3`, so this cannot fail.
   defp encode(term), do: JSON.encode!(term)
 end

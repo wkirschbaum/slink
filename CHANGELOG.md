@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-07-09
+
+Robustness release: no user action, handler return value, or malformed Slack
+frame can take a transport down.
+
+### Fixed
+
+- **A `view_submission` handler can no longer take down the transport.** When a
+  handler returned an `{:ack, map}` whose payload wasn't JSON-encodable (e.g. it
+  held a tuple), encoding the ACK frame raised inside the transport process — on
+  Socket Mode this crashed the connection and the supervisor's restart re-read
+  the same envelope, producing a crash-reconnect loop. The payload is now checked
+  for encodability in `Slink.Dispatcher.ack_result/3`; a non-encodable one is
+  logged and degrades to `%{}` (closing the modal), like a handler crash already
+  does.
+- **A malformed Slack frame can no longer crash the Socket Mode connection.**
+  `Slink.Event` parsing and accessors used `get_in/2`, which raises when a value
+  Slack normally nests as a map (a `channel`, `view`, `item`, or the envelope
+  `payload` itself) arrives as a string, list, or null. Since `event_id/1` and
+  event construction run in the socket process, that raise dropped the
+  connection. All parsing and accessors are now total — a wrong-shaped payload
+  yields `nil`/empty defaults instead of raising — and the socket wraps
+  per-message handling as a final backstop.
+- **A bad reply body no longer crashes a channel's rate-limit worker.** If a
+  handler's reply carried a body the Web API client couldn't encode, the raise
+  killed the per-channel `Slink.Rate.Channel` worker and dropped everything else
+  queued for that channel. The send is now wrapped so a raising call is logged
+  and draining continues, and `Slink.Rate` tolerates a worker that fails to start
+  rather than crashing the caller.
+- **The Events API plug no longer 500s on a form body with invalid
+  percent-encoding** — `URI.decode_query/1` raising now degrades to an empty
+  payload.
+
 ## [0.2.1] - 2026-07-09
 
 ### Fixed
@@ -78,6 +111,7 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
+[0.2.2]: https://github.com/wkirschbaum/slink/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/wkirschbaum/slink/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/wkirschbaum/slink/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wkirschbaum/slink/releases/tag/v0.1.0

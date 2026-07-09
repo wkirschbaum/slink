@@ -141,7 +141,13 @@ defmodule Slink.EventsApi.Plug do
     end
   end
 
-  defp decode_form(body), do: URI.decode_query(body)
+  # Slack form bodies are well-formed, but invalid percent-encoding would make
+  # URI.decode_query/1 raise — degrade to an empty map so a request never 500s.
+  defp decode_form(body) do
+    URI.decode_query(body)
+  rescue
+    ArgumentError -> %{}
+  end
 
   # Surface Slack's retry counter (a header) in the body so `Event.retry?/1`
   # works over HTTP the way it does for Socket Mode's envelope field.

@@ -53,6 +53,26 @@ defmodule Slink.Event do
   @doc "The atom for a known Slack `type` string, or the string itself if unknown."
   def normalize_type(nil), do: nil
   def normalize_type(type) when is_binary(type), do: Map.get(@type_map, type, type)
+  # Slack always sends a string here, but a malformed frame might not — never crash.
+  def normalize_type(_type), do: nil
+
+  # Safe nested lookup: walk `keys`, returning nil the moment a level isn't a map.
+  # Slack nests things (a `channel`, a `view`, an `item`) as maps, but a malformed
+  # payload could put a string or a list there — `get_in/2` would raise on that,
+  # and this code often runs in a transport process where a raise drops the
+  # connection. `dig/2` degrades to nil instead. See `as_map/1` for the top level.
+  defp dig(data, keys) do
+    Enum.reduce_while(keys, data, fn
+      key, acc when is_map(acc) -> {:cont, Map.get(acc, key)}
+      _key, _acc -> {:halt, nil}
+    end)
+  end
+
+  # Coerce a value to a map, so accessors can index it without raising. Slack
+  # payloads are always objects, but a malformed frame might send a string, list,
+  # or null where a map is expected.
+  defp as_map(value) when is_map(value), do: value
+  defp as_map(_value), do: %{}
 
   @doc """
   The channel the event happened in, or `nil`.
@@ -61,18 +81,23 @@ defmodule Slink.Event do
   is a map), so it's read from the interaction's `channel`/`container` instead.
   """
   def channel(%__MODULE__{kind: :interactive, payload: payload}),
-    do: get_in(payload, ["channel", "id"]) || get_in(payload, ["container", "channel_id"])
+    do: dig(payload, ["channel", "id"]) || dig(payload, ["container", "channel_id"])
 
   def channel(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["channel_id"]
 
   def channel(%__MODULE__{type: type, payload: payload})
       when type in [:reaction_added, :reaction_removed],
-      do: get_in(payload, ["item", "channel"])
+      do: dig(payload, ["item", "channel"])
 
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
   @doc "The event's text, or an empty string."
-  def text(%__MODULE__{payload: payload}), do: payload["text"] || ""
+  def text(%__MODULE__{payload: payload}) do
+    case payload["text"] do
+      text when is_binary(text) -> text
+      _ -> ""
+    end
+  end
 
   @doc """
   The user who produced the event, or `nil`.
@@ -81,7 +106,7 @@ defmodule Slink.Event do
   flat `user_id`; both are surfaced here as the plain user id, like message
   events.
   """
-  def user(%__MODULE__{kind: :interactive, payload: payload}), do: get_in(payload, ["user", "id"])
+  def user(%__MODULE__{kind: :interactive, payload: payload}), do: dig(payload, ["user", "id"])
   def user(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["user_id"]
   def user(%__MODULE__{payload: payload}), do: payload["user"]
 
@@ -158,11 +183,11 @@ defmodule Slink.Event do
   `reaction_removed` it's the `ts` of the reacted-to item.
   """
   def ts(%__MODULE__{kind: :interactive, payload: payload}),
-    do: get_in(payload, ["message", "ts"]) || get_in(payload, ["container", "message_ts"])
+    do: dig(payload, ["message", "ts"]) || dig(payload, ["container", "message_ts"])
 
   def ts(%__MODULE__{type: type, payload: payload})
       when type in [:reaction_added, :reaction_removed],
-      do: get_in(payload, ["item", "ts"])
+      do: dig(payload, ["item", "ts"])
 
   def ts(%__MODULE__{payload: payload}), do: payload["ts"]
 
@@ -174,7 +199,7 @@ defmodule Slink.Event do
   a click in a thread threads and a click on a top-level message does not.
   """
   def thread_ts(%__MODULE__{kind: :interactive, payload: payload}),
-    do: get_in(payload, ["message", "thread_ts"]) || get_in(payload, ["container", "thread_ts"])
+    do: dig(payload, ["message", "thread_ts"]) || dig(payload, ["container", "thread_ts"])
 
   def thread_ts(%__MODULE__{payload: payload}), do: payload["thread_ts"]
 
@@ -216,7 +241,12 @@ defmodule Slink.Event do
   def trigger_id(%__MODULE__{payload: payload}), do: payload["trigger_id"]
 
   @doc "The list of actions in a `block_actions` interaction (empty otherwise)."
-  def actions(%__MODULE__{payload: payload}), do: payload["actions"] || []
+  def actions(%__MODULE__{payload: payload}) do
+    case payload["actions"] do
+      actions when is_list(actions) -> actions
+      _ -> []
+    end
+  end
 
   @doc "The `action_id` of the first action in a `block_actions` interaction, or `nil`."
   def action_id(%__MODULE__{} = event) do
@@ -233,21 +263,24 @@ defmodule Slink.Event do
   """
   def action_value(%__MODULE__{} = event) do
     case actions(event) do
-      [action | _] -> action["value"] || get_in(action, ["selected_option", "value"])
-      _ -> nil
+      [action | _] when is_map(action) ->
+        action["value"] || dig(action, ["selected_option", "value"])
+
+      _ ->
+        nil
     end
   end
 
   @doc "The `callback_id` of a shortcut / message action / view, or `nil`."
   def callback_id(%__MODULE__{payload: payload}),
-    do: payload["callback_id"] || get_in(payload, ["view", "callback_id"])
+    do: payload["callback_id"] || dig(payload, ["view", "callback_id"])
 
   @doc "The `view` map of a `view_submission` / `view_closed` interaction, or `nil`."
   def view(%__MODULE__{payload: payload}), do: payload["view"]
 
   @doc "A modal's submitted input values (`view.state.values`), or `%{}`."
   def view_values(%__MODULE__{payload: payload}),
-    do: get_in(payload, ["view", "state", "values"]) || %{}
+    do: dig(payload, ["view", "state", "values"]) || %{}
 
   @doc """
   Slack's per-event id (`event_id`) for an event callback, or `nil`.
@@ -257,9 +290,9 @@ defmodule Slink.Event do
   interactions return `nil`.
   """
   def event_id(%__MODULE__{transport: :socket_mode, raw: raw}),
-    do: get_in(raw, ["payload", "event_id"])
+    do: dig(raw, ["payload", "event_id"])
 
-  def event_id(%__MODULE__{raw: raw}), do: raw["event_id"]
+  def event_id(%__MODULE__{raw: raw}), do: dig(raw, ["event_id"])
 
   @doc """
   Slack's retry attempt number for this delivery (`0` for a first delivery).
@@ -267,15 +300,17 @@ defmodule Slink.Event do
   Socket Mode carries it on the envelope; over HTTP the plug stashes the
   `X-Slack-Retry-Num` header into the body so it's visible here too.
   """
-  def retry_attempt(%__MODULE__{transport: :socket_mode, raw: raw}), do: raw["retry_attempt"] || 0
-  def retry_attempt(%__MODULE__{raw: raw}), do: raw["retry_num"] || 0
+  def retry_attempt(%__MODULE__{transport: :socket_mode, raw: raw}),
+    do: dig(raw, ["retry_attempt"]) || 0
+
+  def retry_attempt(%__MODULE__{raw: raw}), do: dig(raw, ["retry_num"]) || 0
 
   @doc "Whether Slack flagged this as a retry of an earlier delivery."
   def retry?(%__MODULE__{} = event), do: retry_attempt(event) > 0
 
   @doc "Normalise a decoded Socket Mode envelope."
   def from_socket_mode(%{"type" => "events_api"} = env) do
-    event = get_in(env, ["payload", "event"]) || %{}
+    event = as_map(dig(env, ["payload", "event"]))
 
     %__MODULE__{
       type: normalize_type(event["type"]),
@@ -290,7 +325,7 @@ defmodule Slink.Event do
 
   def from_socket_mode(%{"type" => type, "payload" => payload} = env)
       when type in ["slash_commands", "interactive"] do
-    payload = payload || %{}
+    payload = as_map(payload)
 
     %__MODULE__{
       # For interactions, route on the inner kind (`:block_actions`,
@@ -305,6 +340,8 @@ defmodule Slink.Event do
   end
 
   def from_socket_mode(env) do
+    env = as_map(env)
+
     %__MODULE__{
       type: normalize_type(env["type"]),
       payload: env,
@@ -317,6 +354,8 @@ defmodule Slink.Event do
 
   @doc "Normalise a decoded Events API HTTP body."
   def from_http(%{"type" => "event_callback", "event" => event} = body) do
+    event = as_map(event)
+
     %__MODULE__{
       type: normalize_type(event["type"]),
       subtype: event["subtype"],
@@ -328,6 +367,8 @@ defmodule Slink.Event do
   end
 
   def from_http(body) do
+    body = as_map(body)
+
     %__MODULE__{
       type: normalize_type(body["type"]),
       payload: body,
@@ -368,6 +409,11 @@ defmodule Slink.Event do
       transport: :http,
       kind: :slash_commands
     }
+  end
+
+  # A form body always decodes to a map, but keep this total for any caller.
+  def from_http_form(other) do
+    %__MODULE__{payload: %{}, raw: as_map(other), transport: :http, kind: :other}
   end
 
   # Route interactions on their inner kind; slash commands keep the envelope kind.

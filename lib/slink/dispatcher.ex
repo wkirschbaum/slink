@@ -56,9 +56,24 @@ defmodule Slink.Dispatcher do
       Task.Supervisor.async_nolink(Slink.TaskSupervisor, fn -> run(module, event, context) end)
 
     case Task.yield(task, ack_timeout()) || Task.shutdown(task, :brutal_kill) do
-      {:ok, payload} when is_map(payload) -> payload
+      {:ok, payload} when is_map(payload) -> encodable(payload)
       _ -> %{}
     end
+  end
+
+  # The payload is JSON-encoded into the transport's ACK frame. A handler that
+  # returns a value JSON can't encode (a tuple, PID, …) must not crash the
+  # transport — degrade to `%{}` (which closes the modal), like a crash does.
+  defp encodable(payload) do
+    _ = JSON.encode!(payload)
+    payload
+  rescue
+    e ->
+      Logger.error(
+        "Slink: view_submission ack payload is not JSON-encodable (#{inspect(e)}); closing the modal"
+      )
+
+      %{}
   end
 
   defp emit_received(module, %Event{} = event, %Slink.Context{} = context) do

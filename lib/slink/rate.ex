@@ -17,6 +17,8 @@ defmodule Slink.Rate do
       single channel (default 1000ms).
   """
 
+  require Logger
+
   alias Slink.Rate.Channel
 
   @doc "Queue a `chat.postMessage` for `channel`, rate-limited per channel."
@@ -27,21 +29,39 @@ defmodule Slink.Rate do
 
   @doc "Queue any Web API `method` targeting `channel`, rate-limited per channel."
   def enqueue(bot_token, channel, method, params) do
-    channel
-    |> worker()
-    |> GenServer.cast({:enqueue, {bot_token, method, params}})
+    case worker(channel) do
+      {:ok, pid} -> GenServer.cast(pid, {:enqueue, {bot_token, method, params}})
+      :error -> :ok
+    end
   end
 
   defp worker(channel) do
     case Registry.lookup(Slink.Rate.Registry, channel) do
       [{pid, _}] ->
-        pid
+        {:ok, pid}
 
       [] ->
-        case DynamicSupervisor.start_child(Slink.Rate.Supervisor, {Channel, channel}) do
-          {:ok, pid} -> pid
-          {:error, {:already_started, pid}} -> pid
-        end
+        start_worker(channel)
+    end
+  end
+
+  # Start a channel worker, tolerating the start/lookup race. If it can't be
+  # started for any other reason, drop the send rather than crash the caller —
+  # a failed rate-limit worker must never take down a handler or transport.
+  defp start_worker(channel) do
+    case DynamicSupervisor.start_child(Slink.Rate.Supervisor, {Channel, channel}) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:already_started, pid}} ->
+        {:ok, pid}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Slink.Rate: could not start worker for #{inspect(channel)}: #{inspect(reason)}"
+        )
+
+        :error
     end
   end
 end

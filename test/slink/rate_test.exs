@@ -54,6 +54,30 @@ defmodule Slink.RateTest do
     assert Slink.Rate.post_message("xoxb", "C-fail", "x") == :ok
   end
 
+  test "a raising send (e.g. a non-encodable body) doesn't crash the worker or drop the queue" do
+    test_pid = self()
+
+    # First send raises (as Req would on a body it can't encode); the rest must
+    # still drain on the same worker — a bad payload can't take the channel down.
+    Application.put_env(:slink, :rate_sender, fn _t, _m, params ->
+      if params.text == "boom", do: raise("cannot encode")
+      send(test_pid, {:sent, params.text})
+      {:ok, %{"ok" => true}}
+    end)
+
+    log =
+      capture_log(fn ->
+        Slink.Rate.post_message("xoxb", "C-raise", "boom")
+        Slink.Rate.post_message("xoxb", "C-raise", "after")
+
+        assert_receive {:sent, "after"}, 1_000
+      end)
+
+    [{pid, _}] = Registry.lookup(Slink.Rate.Registry, "C-raise")
+    assert Process.alive?(pid)
+    assert log =~ "cannot encode"
+  end
+
   test "bounds the queue under sustained backpressure, dropping oldest" do
     Application.put_env(:slink, :rate_max_queue, 3)
     # Freeze draining after the first send so the queue actually builds up.

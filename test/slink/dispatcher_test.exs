@@ -24,12 +24,32 @@ defmodule Slink.DispatcherTest do
   defmodule NoCallbackBot do
   end
 
+  defmodule BadAckBot do
+    use Slink
+
+    @impl true
+    # A view_submission handler returning an ack payload with a value JSON can't
+    # encode (a tuple). The transport must not crash trying to encode it.
+    def handle_event(_event, _context),
+      do: {:ack, %{response_action: "errors", errors: %{"block" => {:not, :encodable}}}}
+  end
+
   setup do
     Process.register(self(), :dispatcher_sink)
     :ok
   end
 
   defp event, do: %Event{type: "app_mention", payload: %{}, raw: %{}, transport: :socket_mode}
+
+  defp view_submission,
+    do: %Event{
+      type: :view_submission,
+      kind: :interactive,
+      payload: %{},
+      raw: %{},
+      transport: :socket_mode
+    }
+
   defp context, do: %Context{transport: :socket_mode, bot_token: nil}
 
   test "invokes the module's handle_event/2" do
@@ -63,6 +83,17 @@ defmodule Slink.DispatcherTest do
       end)
 
     assert log =~ "does not implement handle_event/2"
+  end
+
+  test "ack_result returns %{} when the handler's ack payload can't be JSON-encoded" do
+    # The payload flows into the transport's ACK frame, which JSON-encodes it. A
+    # non-encodable value must degrade to closing the modal, not crash the caller.
+    log =
+      capture_log(fn ->
+        assert %{} == Dispatcher.ack_result(BadAckBot, view_submission(), context())
+      end)
+
+    assert log =~ "not JSON-encodable"
   end
 
   # Named handler (captured function) avoids telemetry's local-fn perf warning.

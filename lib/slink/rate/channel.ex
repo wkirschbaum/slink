@@ -51,12 +51,19 @@ defmodule Slink.Rate.Channel do
   defp pump(%{queue: []} = state), do: state
 
   defp pump(%{queue: [{bot_token, method, params} | rest]} = state) do
-    case send_fun().(bot_token, method, params) do
-      {:error, reason} ->
-        Logger.warning("Slink.Rate: #{method} on #{state.channel} failed: #{inspect(reason)}")
+    try do
+      case send_fun().(bot_token, method, params) do
+        {:error, reason} ->
+          Logger.warning("Slink.Rate: #{method} on #{state.channel} failed: #{inspect(reason)}")
 
-      _ok ->
-        :ok
+        _ok ->
+          :ok
+      end
+    rescue
+      # A bad body (e.g. one Req can't JSON-encode) must not crash the worker and
+      # drop the whole queue — log it and move on to the next request.
+      e ->
+        Logger.warning("Slink.Rate: #{method} on #{state.channel} raised: #{inspect(e)}")
     end
 
     Process.send_after(self(), :drain, interval())

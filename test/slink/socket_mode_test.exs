@@ -31,9 +31,32 @@ defmodule Slink.SocketModeTest do
     def handle_event(_event, _context), do: :ok
   end
 
+  defmodule BadAckBot do
+    use Slink
+
+    @impl true
+    # An ack payload carrying a value JSON can't encode (a tuple).
+    def handle_event(%Slink.Event{type: :view_submission}, _context),
+      do: {:ack, %{response_action: "errors", errors: %{"block" => {:not, :encodable}}}}
+
+    def handle_event(_event, _context), do: :ok
+  end
+
   setup do
     Process.register(self(), :socket_mode_sink)
     :ok
+  end
+
+  defp view_submission_frames do
+    [
+      {:text, JSON.encode!(%{"type" => "hello"})},
+      {:text,
+       JSON.encode!(%{
+         "type" => "interactive",
+         "envelope_id" => "vs-1",
+         "payload" => %{"type" => "view_submission", "view" => %{"callback_id" => "m"}}
+       })}
+    ]
   end
 
   defp start_client(url, opts \\ []) do
@@ -70,17 +93,7 @@ defmodule Slink.SocketModeTest do
   end
 
   test "a view_submission is ACKed with the handler's response_action payload" do
-    frames = [
-      {:text, JSON.encode!(%{"type" => "hello"})},
-      {:text,
-       JSON.encode!(%{
-         "type" => "interactive",
-         "envelope_id" => "vs-1",
-         "payload" => %{"type" => "view_submission", "view" => %{"callback_id" => "m"}}
-       })}
-    ]
-
-    {:ok, url, server} = FakeSlack.start(self(), frames: frames)
+    {:ok, url, server} = FakeSlack.start(self(), frames: view_submission_frames())
     on_exit(fn -> Process.exit(server, :normal) end)
 
     start_client(url, module: AckBot)
@@ -91,6 +104,21 @@ defmodule Slink.SocketModeTest do
              "envelope_id" => "vs-1",
              "payload" => %{"response_action" => "errors", "errors" => %{"block" => "nope"}}
            }
+  end
+
+  test "a non-encodable ack payload closes the modal instead of crashing the socket" do
+    {:ok, url, server} = FakeSlack.start(self(), frames: view_submission_frames())
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    capture_log(fn ->
+      pid = start_client(url, module: BadAckBot)
+
+      # The bad payload can't be JSON-encoded; instead of the transport crashing,
+      # it ACKs empty (which closes the modal) and stays alive.
+      assert_receive {:fake_slack, :frame, ack}, 15_000
+      assert JSON.decode!(ack) == %{"envelope_id" => "vs-1"}
+      assert Process.alive?(pid)
+    end)
   end
 
   test "verbose: true logs every incoming frame" do
@@ -225,6 +253,33 @@ defmodule Slink.SocketModeTest do
       assert_receive {:fake_slack, :frame, ack}, 15_000
       assert JSON.decode!(ack) == %{"envelope_id" => "env-1"}
       Process.sleep(100)
+      assert Process.alive?(pid)
+    end)
+  end
+
+  test "a malformed envelope shape is handled without dropping the connection" do
+    # A well-formed JSON frame, but the envelope's payload is a string where Slack
+    # would send a map. Parsing/dedup must not raise inside the socket process.
+    frames = [
+      {:text, JSON.encode!(%{"type" => "hello"})},
+      {:text,
+       JSON.encode!(%{
+         "type" => "interactive",
+         "envelope_id" => "bad-1",
+         "payload" => "not a map"
+       })},
+      FakeSlack.envelope_frame()
+    ]
+
+    {:ok, url, server} = FakeSlack.start(self(), frames: frames)
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    capture_log(fn ->
+      pid = start_client(url)
+
+      # The malformed envelope is still ACKed (it has an envelope_id), and the
+      # following real event is dispatched — the socket never went down.
+      assert_receive {:bot_event, %Slink.Event{type: :app_mention}, _context}, 15_000
       assert Process.alive?(pid)
     end)
   end
