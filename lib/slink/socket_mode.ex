@@ -214,6 +214,15 @@ defmodule Slink.SocketMode do
     {:noreply, schedule_idle_check(state)}
   end
 
+  # A modal-submit ACK computed off-process (see handle_message for sync_ack
+  # events). Must match before the Mint transport clause below, which treats
+  # unknown messages as noise. If the connection was replaced meanwhile,
+  # send_frame is a no-op and Slack redelivers the envelope — same as an ACK
+  # lost in transit.
+  def handle_info({:ack_ready, envelope_id, payload}, state) do
+    {:noreply, ack(state, envelope_id, payload)}
+  end
+
   # Mint delivers transport messages (tcp/ssl) here.
   def handle_info(message, %{conn: conn} = state) when conn != nil do
     case Mint.WebSocket.stream(conn, message) do
@@ -493,9 +502,18 @@ defmodule Slink.SocketMode do
     }
 
     if Dispatcher.sync_ack?(event) do
-      # A modal submit: Slack wants the response in the ACK, so run the handler
-      # now (bounded and isolated by ack_result/3) and ACK with its payload.
-      ack(state, id, Dispatcher.ack_result(state.module, event, context))
+      # A modal submit: Slack wants the response in the ACK. The handler runs
+      # off-process (bounded and isolated by ack_result/3) and posts the
+      # payload back as :ack_ready — blocking here instead would serialize
+      # concurrent submits and push the later ones past Slack's ~3s window.
+      parent = self()
+      module = state.module
+
+      Task.Supervisor.start_child(Slink.TaskSupervisor, fn ->
+        send(parent, {:ack_ready, id, Dispatcher.ack_result(module, event, context)})
+      end)
+
+      state
     else
       # ACK first (within Slack's 3s window), then dispatch off-process. The ACK
       # advances the Mint connection state, so a raise from dispatch must not

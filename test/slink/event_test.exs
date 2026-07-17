@@ -162,6 +162,44 @@ defmodule Slink.EventTest do
       refute Event.from_bot?(msg(%{"message" => "not a map"}))
     end
 
+    test "message_changed accessors read the nested (edited) message" do
+      changed =
+        msg(%{
+          "subtype" => "message_changed",
+          "channel" => "C1",
+          # The wrapper's ts is the edit event's own timestamp — not postable.
+          "ts" => "999.0",
+          "message" => %{
+            "user" => "U-author",
+            "text" => "edited text",
+            "ts" => "5.0",
+            "thread_ts" => "1.0"
+          }
+        })
+
+      assert Event.text(changed) == "edited text"
+      assert Event.user(changed) == "U-author"
+      assert Event.ts(changed) == "5.0"
+      assert Event.thread_ts(changed) == "1.0"
+      # Replies thread under the edited message, not the edit event.
+      assert Event.reply_thread(changed) == "1.0"
+      assert Event.channel(changed) == "C1"
+    end
+
+    test "message_deleted reads previous_message, including bot authorship" do
+      deleted =
+        msg(%{
+          "subtype" => "message_deleted",
+          "channel" => "C1",
+          "deleted_ts" => "5.0",
+          "previous_message" => %{"bot_id" => "B1", "text" => "gone", "ts" => "5.0"}
+        })
+
+      assert Event.text(deleted) == "gone"
+      assert Event.from_bot?(deleted)
+      assert Event.ts(deleted) == "5.0"
+    end
+
     test "text/1 and user/1 surface the payload, with a safe default for text" do
       assert Event.text(msg(%{"text" => "hello"})) == "hello"
       assert Event.text(msg(%{})) == ""

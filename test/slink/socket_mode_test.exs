@@ -186,6 +186,53 @@ defmodule Slink.SocketModeTest do
            }
   end
 
+  defmodule SlowThenFastAckBot do
+    use Slink
+
+    @impl true
+    def handle_event(%Slink.Event{type: :view_submission} = event, _context) do
+      case Slink.Event.callback_id(event) do
+        "slow" -> Process.sleep(1_500)
+        _fast -> :ok
+      end
+
+      {:ack, %{response_action: "clear"}}
+    end
+  end
+
+  test "concurrent view_submissions don't serialize: a fast submit ACKs before a slow one" do
+    # The old inline path ran each modal handler in the transport GenServer, so
+    # a slow submit delayed every later one — pushing it past Slack's ~3s
+    # window. Handlers now run off-process and ACK on completion.
+    frames = [
+      {:text, JSON.encode!(%{"type" => "hello"})},
+      {:text,
+       JSON.encode!(%{
+         "type" => "interactive",
+         "envelope_id" => "vs-slow",
+         "payload" => %{"type" => "view_submission", "view" => %{"callback_id" => "slow"}}
+       })},
+      {:text,
+       JSON.encode!(%{
+         "type" => "interactive",
+         "envelope_id" => "vs-fast",
+         "payload" => %{"type" => "view_submission", "view" => %{"callback_id" => "fast"}}
+       })}
+    ]
+
+    {:ok, url, server} = FakeSlack.start(self(), frames: frames)
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    start_client(url, module: SlowThenFastAckBot)
+
+    # The fast submit — delivered *after* the slow one — must ACK first.
+    assert_receive {:fake_slack, :frame, first_ack}, 15_000
+    assert %{"envelope_id" => "vs-fast"} = JSON.decode!(first_ack)
+
+    assert_receive {:fake_slack, :frame, second_ack}, 15_000
+    assert %{"envelope_id" => "vs-slow"} = JSON.decode!(second_ack)
+  end
+
   test "a non-encodable ack payload closes the modal instead of crashing the socket" do
     {:ok, url, server} = FakeSlack.start(self(), frames: view_submission_frames())
     on_exit(fn -> Process.exit(server, :normal) end)

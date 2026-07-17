@@ -13,6 +13,13 @@ support (assistant threads + streamed replies).
 
 ### Added
 
+- **`mix slink.smoke`** — a live workspace smoke test, `auth.test` for
+  everything Slink uses: identity, posting, reactions, and whether the **AI
+  streaming surface** is enabled for the app (informational — `stream_reply/3`
+  falls back to plain messages without it). Point it at a private testing
+  channel: `SLACK_BOT_TOKEN=xoxb-... mix slink.smoke C012345`. The offline
+  half of the story is `Slink.Testing`.
+
 - **AI-app (assistant) support.** `:assistant_thread_started` /
   `:assistant_thread_context_changed` normalise like any other event (channel,
   user and thread resolve from `assistant_thread`). Handlers get
@@ -68,6 +75,16 @@ support (assistant threads + streamed replies).
   envelope — after a dropped ACK on one socket, or across a fleet's
   connections — ran the handler twice). `view_submission` deliberately stays
   un-deduped: its synchronous ack must answer every delivery.
+- **Concurrent `view_submission` submits no longer serialize.** Socket Mode
+  ran each synchronous modal-submit handler inside the transport GenServer, so
+  a slow submit could push a concurrent one past Slack's ~3s window. Handlers
+  now run off-process and the ACK frame is sent on completion — a fast submit
+  ACKs immediately even while a slow one is still running.
+- **`message_changed` / `message_deleted` are fully normalised.** `text/1`,
+  `user/1`, `ts/1` and `thread_ts/1` now read the nested message (the edited /
+  deleted content — the wrapper's own `ts` is the edit event's, not postable),
+  so `reply_thread/1` threads correctly under the real message, and
+  `from_bot?/1` also recognises deleted bot messages.
 
 ### Documentation
 

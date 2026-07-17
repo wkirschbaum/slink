@@ -76,6 +76,18 @@ defmodule Slink.Event do
   defp as_map(value) when is_map(value), do: value
   defp as_map(_value), do: %{}
 
+  # Some message subtypes nest the *real* message: `message_changed` (an edit,
+  # a link unfurl) carries it under "message", `message_deleted` under
+  # "previous_message" — the top level then holds only the change event's own
+  # metadata. Accessors read the nested message for those, so text/user/ts
+  # answer about the message a human sees, not the wrapper.
+  defp nested(%{"subtype" => "message_changed"} = payload), do: as_map(payload["message"])
+
+  defp nested(%{"subtype" => "message_deleted"} = payload),
+    do: as_map(payload["previous_message"])
+
+  defp nested(_payload), do: nil
+
   @doc """
   The channel the event happened in, or `nil`.
 
@@ -98,9 +110,14 @@ defmodule Slink.Event do
 
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
-  @doc "The event's text, or an empty string."
+  @doc """
+  The event's text, or an empty string.
+
+  For `message_changed` / `message_deleted` subtypes this is the nested
+  message's text (the edited / deleted content), not the wrapper's.
+  """
   def text(%__MODULE__{payload: payload}) do
-    case payload["text"] do
+    case (nested(payload) || payload)["text"] do
       text when is_binary(text) -> text
       _ -> ""
     end
@@ -120,7 +137,7 @@ defmodule Slink.Event do
       when type in [:assistant_thread_started, :assistant_thread_context_changed],
       do: dig(payload, ["assistant_thread", "user_id"])
 
-  def user(%__MODULE__{payload: payload}), do: payload["user"]
+  def user(%__MODULE__{payload: payload}), do: (nested(payload) || payload)["user"]
 
   # A Slack user mention in message text looks like `<@U0123ABCD>`, and sometimes
   # carries a label: `<@U0123ABCD|alice>`. Capture the id either way.
@@ -201,7 +218,10 @@ defmodule Slink.Event do
       when type in [:reaction_added, :reaction_removed],
       do: dig(payload, ["item", "ts"])
 
-  def ts(%__MODULE__{payload: payload}), do: payload["ts"]
+  # For message_changed/message_deleted the wrapper's own ts is the *edit
+  # event's* timestamp — not a postable message — so surface the nested
+  # message's ts (which is also what a threaded reply must target).
+  def ts(%__MODULE__{payload: payload}), do: (nested(payload) || payload)["ts"]
 
   @doc """
   The thread this event belongs to, or `nil` if it's not in a thread.
@@ -217,7 +237,7 @@ defmodule Slink.Event do
       when type in [:assistant_thread_started, :assistant_thread_context_changed],
       do: dig(payload, ["assistant_thread", "thread_ts"])
 
-  def thread_ts(%__MODULE__{payload: payload}), do: payload["thread_ts"]
+  def thread_ts(%__MODULE__{payload: payload}), do: (nested(payload) || payload)["thread_ts"]
 
   @doc "Whether this event happened inside a thread."
   def in_thread?(%__MODULE__{} = event), do: is_binary(thread_ts(event))
@@ -228,11 +248,12 @@ defmodule Slink.Event do
   Slack tags bot-authored messages with a `bot_id`. Handlers use this to skip
   the bot's own posts so an auto-reply never triggers itself in a loop. Message
   subtypes that nest the real message (`message_changed` — e.g. an edit or a
-  link unfurl on the bot's own post) carry the `bot_id` one level down, so
-  that's checked too.
+  link unfurl on the bot's own post — and `message_deleted`) carry the
+  `bot_id` one level down, so that's checked too.
   """
   def from_bot?(%__MODULE__{payload: payload}) do
-    is_binary(payload["bot_id"]) or is_binary(dig(payload, ["message", "bot_id"]))
+    is_binary(payload["bot_id"]) or is_binary(dig(payload, ["message", "bot_id"])) or
+      is_binary((nested(payload) || %{})["bot_id"])
   end
 
   @doc """

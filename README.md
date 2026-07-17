@@ -289,8 +289,16 @@ end
 ```
 
 Fixtures exist for mentions, messages, reactions, slash commands, button
-clicks, modal submits and more — see `Slink.Testing.event/2`. Failure paths are
-scriptable via the `:api` option.
+clicks, modal submits, assistant threads and more — see
+`Slink.Testing.event/2`. Failure paths are scriptable via the `:api` option.
+
+For the *live* half — verifying a real token and workspace, including whether
+AI streaming is enabled for your app — run the smoke test against a private
+testing channel:
+
+```bash
+SLACK_BOT_TOKEN=xoxb-... mix slink.smoke C0123456789
+```
 
 ## Going to production — Events API (HTTP)
 
