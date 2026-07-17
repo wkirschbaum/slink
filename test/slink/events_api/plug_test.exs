@@ -128,6 +128,34 @@ defmodule Slink.EventsApi.PlugTest do
     assert_receive {:ctx, %Slink.Context{bot_token: nil}}, 1_000
   end
 
+  test "a failing resolver's exception is not inspected into the log (it can embed tokens)" do
+    # The documented multi-workspace pattern is `Map.fetch!(tokens, team_id)` —
+    # for an unknown team that raises a KeyError whose `term` is the whole token
+    # map. Logging `inspect(exception)` would print every workspace's token.
+    tokens = %{"T-known" => "xoxb-super-secret"}
+
+    opts =
+      Slink.EventsApi.Plug.init(
+        module: ContextBot,
+        signing_secret: @secret,
+        bot_token: fn team_id -> Map.fetch!(tokens, team_id) end
+      )
+
+    body =
+      JSON.encode!(%{type: "event_callback", team_id: "T-unknown", event: %{type: "app_mention"}})
+
+    log =
+      capture_log(fn ->
+        conn = Slink.EventsApi.Plug.call(signed_conn(body), opts)
+        assert conn.status == 200
+      end)
+
+    assert log =~ "resolver failed"
+    assert log =~ "KeyError"
+    refute log =~ "xoxb-super-secret"
+    assert_receive {:ctx, %Slink.Context{bot_token: nil}}, 1_000
+  end
+
   test "fails closed (401, not 500) when the signing secret is misconfigured" do
     # e.g. a secret function reading a missing env var and returning nil. An
     # empty-key HMAC would also be computable by anyone — never accept it.
@@ -229,6 +257,17 @@ defmodule Slink.EventsApi.PlugTest do
 
     assert conn.status == 200
     assert_receive {:event, %Slink.Event{type: :slash_commands, kind: :slash_commands}}, 1_000
+  end
+
+  test "answers Slack's ssl_check probe with 200 without dispatching a phantom slash command" do
+    conn =
+      Slink.EventsApi.Plug.call(
+        signed_form(%{"ssl_check" => "1", "token" => "legacy"}),
+        opts()
+      )
+
+    assert conn.status == 200
+    refute_receive {:event, _}, 200
   end
 
   test "decodes a form-encoded interaction (payload field) and dispatches it" do

@@ -206,8 +206,9 @@ defmodule Slink do
 
       _ ->
         raise ArgumentError,
-              "reply/3 has no channel for a #{inspect(event.type)} event; return " <>
-                "{:ack, map} from a view_submission, or post via Slink.API directly"
+              "reply/3 has no channel for a #{inspect(event.type)} event (a global shortcut " <>
+                "or view interaction happens outside a channel); use open_modal/2 or " <>
+                "send_message/4 — or return {:ack, map} from a view_submission"
     end
   end
 
@@ -297,7 +298,9 @@ defmodule Slink do
     * `:emoji` — reaction name without colons (default `"#{@working_emoji}"`).
 
   Best-effort: reaction API errors are ignored so they never break the handler,
-  and if the event has no message to react to, `fun` just runs inline.
+  and if the event has no message to react to, `fun` just runs inline. One
+  caveat: if the app is shut down mid-work (a deploy, a `:brutal_kill`), the
+  removal never runs and the reaction can be left on the message.
   """
   def working(context, fun, opts \\ [])
 

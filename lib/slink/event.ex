@@ -44,6 +44,7 @@ defmodule Slink.Event do
     app_home_opened
     member_joined_channel member_left_channel
     team_join
+    tokens_revoked app_uninstalled
     slash_commands interactive url_verification
     block_actions view_submission view_closed shortcut message_action
   )a
@@ -210,9 +211,14 @@ defmodule Slink.Event do
   Whether this event was produced by a bot (including this app itself).
 
   Slack tags bot-authored messages with a `bot_id`. Handlers use this to skip
-  the bot's own posts so an auto-reply never triggers itself in a loop.
+  the bot's own posts so an auto-reply never triggers itself in a loop. Message
+  subtypes that nest the real message (`message_changed` — e.g. an edit or a
+  link unfurl on the bot's own post) carry the `bot_id` one level down, so
+  that's checked too.
   """
-  def from_bot?(%__MODULE__{payload: payload}), do: is_binary(payload["bot_id"])
+  def from_bot?(%__MODULE__{payload: payload}) do
+    is_binary(payload["bot_id"]) or is_binary(dig(payload, ["message", "bot_id"]))
+  end
 
   @doc """
   The `thread_ts` to reply into so a reply lands in this event's thread.

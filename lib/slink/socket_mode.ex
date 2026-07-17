@@ -70,9 +70,11 @@ defmodule Slink.SocketMode do
   # Key the child id off `:name` so running one client per workspace under a
   # single supervisor doesn't collide on the default `id: __MODULE__`. Give each
   # a distinct `:name` (see *Multiple workspaces*) and their ids differ too.
+  # `name: nil` (unregistered) gets a unique id per spec, so several unnamed
+  # clients under one supervisor don't collide on `id: nil` either.
   def child_spec(opts) do
     %{
-      id: Keyword.get(opts, :name, __MODULE__),
+      id: Keyword.get(opts, :name, __MODULE__) || {__MODULE__, make_ref()},
       start: {__MODULE__, :start_link, [opts]}
     }
   end
@@ -402,6 +404,12 @@ defmodule Slink.SocketMode do
     e ->
       Logger.error("Slink: dropping a message that raised while handling: #{inspect(e)}")
       state
+  catch
+    # `rescue` misses exits — e.g. Task.Supervisor.start_child exiting :noproc
+    # while the task supervisor restarts. Same containment: drop, keep the socket.
+    kind, reason ->
+      Logger.error("Slink: dropping a message that #{kind}ed while handling: #{inspect(reason)}")
+      state
   end
 
   ## Slack Socket Mode protocol messages
@@ -444,6 +452,9 @@ defmodule Slink.SocketMode do
     Dispatcher.async(module, event, context)
   rescue
     e -> Logger.error("Slink: dropping a dispatch that raised after ack: #{inspect(e)}")
+  catch
+    kind, reason ->
+      Logger.error("Slink: dropping a dispatch that #{kind}ed after ack: #{inspect(reason)}")
   end
 
   defp join_channels(%{join: []}), do: :ok

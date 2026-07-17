@@ -129,7 +129,12 @@ defmodule Slink.EventsApi.Plug do
   # Slash commands and interactions arrive form-encoded; events arrive as JSON.
   defp respond(conn, body, opts) do
     if form?(conn) do
-      handle(conn, decode_form(body), opts, &Event.from_http_form/1)
+      case decode_form(body) do
+        # Slack's periodic `ssl_check=1` probe of a slash-command URL just wants
+        # a 200 — don't dispatch it as a phantom slash command.
+        %{"ssl_check" => _} -> conn |> send_resp(200, "") |> halt()
+        params -> handle(conn, params, opts, &Event.from_http_form/1)
+      end
     else
       respond_json(conn, body, opts)
     end
@@ -205,13 +210,20 @@ defmodule Slink.EventsApi.Plug do
     kind, reason -> resolver_failed({kind, reason})
   end
 
+  # Log only the failure's *kind*, never the full term: a resolver exception can
+  # embed the very secrets it was fetching — e.g. `Map.fetch!(tokens, team_id)`
+  # raises a KeyError whose `term` is the whole token map, and inspecting it
+  # would print every token into the log.
   defp resolver_failed(detail) do
     Logger.warning(
-      "Slink: a signing_secret/bot_token resolver failed (#{inspect(detail)}); treating as unset"
+      "Slink: a signing_secret/bot_token resolver failed (#{failure_kind(detail)}); treating as unset"
     )
 
     nil
   end
+
+  defp failure_kind(%struct{}), do: inspect(struct)
+  defp failure_kind({kind, _reason}), do: inspect(kind)
 
   defp form?(conn) do
     case get_req_header(conn, "content-type") do

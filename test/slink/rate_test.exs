@@ -78,6 +78,30 @@ defmodule Slink.RateTest do
     assert log =~ "cannot encode"
   end
 
+  test "an exiting send (e.g. a pool-checkout timeout) doesn't crash the worker either" do
+    test_pid = self()
+
+    # A slow Slack surfaces as a Finch pool-checkout timeout, which *exits*
+    # rather than raises — the worker must survive that too and keep draining.
+    Application.put_env(:slink, :rate_sender, fn _t, _m, params ->
+      if params.text == "boom", do: exit({:timeout, {NimblePool, :checkout, [:pool]}})
+      send(test_pid, {:sent, params.text})
+      {:ok, %{"ok" => true}}
+    end)
+
+    log =
+      capture_log(fn ->
+        Slink.Rate.post_message("xoxb", "C-exit", "boom")
+        Slink.Rate.post_message("xoxb", "C-exit", "after")
+
+        assert_receive {:sent, "after"}, 1_000
+      end)
+
+    [{pid, _}] = Registry.lookup(Slink.Rate.Registry, "C-exit")
+    assert Process.alive?(pid)
+    assert log =~ "exited"
+  end
+
   test "an idle channel worker stops itself; the next send starts a fresh one" do
     Application.put_env(:slink, :rate_idle_stop_ms, 60)
     on_exit(fn -> Application.delete_env(:slink, :rate_idle_stop_ms) end)

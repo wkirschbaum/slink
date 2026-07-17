@@ -35,7 +35,7 @@ existing options each leave a gap:
 ```elixir
 def deps do
   [
-    {:slink, "~> 0.3"}
+    {:slink, "~> 0.5"}
   ]
 end
 ```
@@ -266,6 +266,18 @@ The same `MyBot` works unchanged across both transports.
 | Slack recommends for | development, internal, behind-firewall | **production**, reliability, scale |
 | Marketplace / distributed apps | ✗ not allowed | ✓ required |
 | Concurrency | capped at 10 connections/app | scales horizontally |
+
+## Telemetry
+
+Slink emits [`:telemetry`](https://hexdocs.pm/telemetry) events you can attach
+to for logging or metrics. All carry `%{system_time: System.system_time()}` as
+the measurement:
+
+| Event | Metadata | When |
+|---|---|---|
+| `[:slink, :event, :received]` | `%{type:, transport:, module:}` | an event arrives, before dispatch |
+| `[:slink, :socket, :connected]` | `%{module:}` | the Socket Mode WebSocket handshake completes |
+| `[:slink, :socket, :disconnected]` | `%{module:}` | a live Socket Mode connection drops |
 
 ## Roadmap
 

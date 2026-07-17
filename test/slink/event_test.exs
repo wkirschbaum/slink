@@ -142,6 +142,26 @@ defmodule Slink.EventTest do
       refute Event.from_bot?(msg(%{"user" => "U1", "text" => "hi"}))
     end
 
+    test "from_bot?/1 sees the nested bot_id of a message_changed subtype" do
+      # An edit/unfurl of the bot's own post arrives as message_changed with the
+      # real message (and its bot_id) nested under "message" — the loop
+      # protection must still recognise it.
+      changed = %{
+        "subtype" => "message_changed",
+        "channel" => "C1",
+        "message" => %{"bot_id" => "B1", "text" => "edited"}
+      }
+
+      assert Event.from_bot?(msg(changed))
+
+      refute Event.from_bot?(
+               msg(%{"subtype" => "message_changed", "message" => %{"user" => "U1"}})
+             )
+
+      # A malformed nesting must not raise.
+      refute Event.from_bot?(msg(%{"message" => "not a map"}))
+    end
+
     test "text/1 and user/1 surface the payload, with a safe default for text" do
       assert Event.text(msg(%{"text" => "hello"})) == "hello"
       assert Event.text(msg(%{})) == ""

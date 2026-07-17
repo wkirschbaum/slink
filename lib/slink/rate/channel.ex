@@ -96,6 +96,12 @@ defmodule Slink.Rate.Channel do
       # drop the whole queue — log it and move on to the next request.
       e ->
         Logger.warning("Slink.Rate: #{method} on #{state.channel} raised: #{inspect(e)}")
+    catch
+      # Exits too: a slow Slack surfaces as a Finch pool-checkout timeout, which
+      # *exits* rather than raises — exactly when the queue is longest and losing
+      # it hurts most.
+      kind, reason ->
+        Logger.warning("Slink.Rate: #{method} on #{state.channel} #{kind}ed: #{inspect(reason)}")
     end
 
     Process.send_after(self(), :drain, interval())

@@ -58,6 +58,29 @@ defmodule Slink.SocketModeTest do
     assert Slink.SocketMode.child_spec(module: Bot).id == Slink.SocketMode
   end
 
+  test "child_spec with name: nil gets a unique id, so several unregistered clients coexist" do
+    a = Slink.SocketMode.child_spec(module: Bot, name: nil)
+    b = Slink.SocketMode.child_spec(module: Bot, name: nil)
+
+    assert a.id != b.id
+
+    # The docs promise `name: nil` runs several clients at once — prove a static
+    # supervisor accepts two of them side by side.
+    open = fn -> {:error, :test_stub} end
+    opts = [module: Bot, name: nil, open_connection: open]
+
+    capture_log(fn ->
+      {:ok, sup} =
+        Supervisor.start_link(
+          [Slink.SocketMode.child_spec(opts), Slink.SocketMode.child_spec(opts)],
+          strategy: :one_for_one
+        )
+
+      assert %{active: 2} = Supervisor.count_children(sup)
+      Supervisor.stop(sup)
+    end)
+  end
+
   defp view_submission_frames do
     [
       {:text, JSON.encode!(%{"type" => "hello"})},

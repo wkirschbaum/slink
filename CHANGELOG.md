@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-17
+
+Bug-hunt pass over the whole library (three independent review lenses:
+OTP/concurrency, HTTP/security, Slack protocol semantics), plus routine
+dependency updates.
+
+### Security
+
+- **A failing token/secret resolver no longer `inspect`s its exception into the
+  log.** The documented multi-workspace pattern (`Map.fetch!(tokens, team_id)`)
+  raises a `KeyError` whose `term` is the whole token map on an unknown team —
+  logging the inspected exception printed every workspace's bot token. Only the
+  failure's kind (e.g. `KeyError`) is logged now.
+
+### Fixed
+
+- **`Slink.Event.from_bot?/1` recognises the bot's own `message_changed`
+  events.** Slack nests the real message (and its `bot_id`) under `"message"`
+  for that subtype, so an edit or link unfurl of the bot's own post slipped past
+  the auto-reply loop protection.
+- **Slack's `ssl_check` probe no longer dispatches a phantom slash command.**
+  The form-encoded `ssl_check=1` health probe of a slash-command URL is answered
+  `200` directly instead of reaching handlers as a `:slash_commands` event with
+  a `nil` command.
+- **Exits are contained like raises on the crash-safety paths.** The Socket Mode
+  message path and the rate worker's send loop rescued exceptions but not exits;
+  a Finch pool-checkout timeout (a slow Slack — exactly when the queue is
+  longest) *exits*, which crashed the rate worker and dropped its whole queue,
+  and a task-supervisor blip could take down the transport.
+- **`Slink.SocketMode` with `name: nil` gets a unique child id**, so several
+  unregistered clients coexist under one static supervisor, as the docs promise.
+
+### Added
+
+- `tokens_revoked` and `app_uninstalled` are known event types (atoms), since a
+  multi-workspace app typically handles them to prune its token store.
+
+### Documentation
+
+- Telemetry events (`[:slink, :event, :received]`, `[:slink, :socket,
+  :connected]`, `[:slink, :socket, :disconnected]`) are now documented in the
+  README.
+- README install snippet tracks the current version (`~> 0.5`).
+- `reply/3`'s no-channel error explains global shortcuts, not just modals; the
+  `working/3` docs note the reaction can be left behind on a mid-work shutdown.
+
 ## [0.5.0] - 2026-07-09
 
 Multi-workspace support: one bot module can now serve many workspaces over
