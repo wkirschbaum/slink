@@ -49,4 +49,11 @@ jobs:
 
       - run: mix compile --warnings-as-errors
 
-      - run: mix test
+      - run: MIX_ENV=prod mix compile --warnings-as-errors
+        if: matrix.lint
+
+      - run: mix docs --warnings-as-errors
+        if: matrix.lint
+
+      # --cover enforces the coverage threshold from mix.exs.
+      - run: mix test --cover

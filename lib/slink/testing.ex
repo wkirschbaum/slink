@@ -311,6 +311,16 @@ defmodule Slink.Testing do
   the call, so tests using `run/3` must be `async: false`.
   """
   def run(module, %Event{} = event, opts \\ []) do
+    # The seams are process-global (app env): two overlapping runs would
+    # interleave swap/restore and could leave a stale capture installed.
+    # Serialize them — the lock is per-node, blocks rather than fails, and is
+    # released automatically if its holder dies, so a killed test can't wedge
+    # it. (Tests using run/3 should still be `async: false`: a concurrent test
+    # that merely *calls the Slack API* during a run window would be captured.)
+    :global.trans({__MODULE__, self()}, fn -> locked_run(module, event, opts) end)
+  end
+
+  defp locked_run(module, %Event{} = event, opts) do
     owner = self()
     ref = make_ref()
     api = Keyword.get(opts, :api, &default_api/2)

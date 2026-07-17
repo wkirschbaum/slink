@@ -22,9 +22,23 @@ defmodule Slink.Dispatcher do
     if duplicate?(module, event) do
       Logger.debug("Slink: dropping duplicate delivery of #{Event.event_id(event)}")
     else
-      Task.Supervisor.start_child(Slink.TaskSupervisor, fn ->
-        dispatch(module, event, context)
-      end)
+      case Task.Supervisor.start_child(task_supervisor(), fn ->
+             dispatch(module, event, context)
+           end) do
+        {:ok, _pid} ->
+          :ok
+
+        # Only reachable with `config :slink, :max_handler_tasks, N` set — the
+        # opt-in backpressure valve. Shedding must be loud, never silent.
+        {:error, :max_children} ->
+          Logger.error(
+            "Slink: handler task limit (:max_handler_tasks) reached; dropping a " <>
+              "#{inspect(event.type)} event"
+          )
+
+        {:error, reason} ->
+          Logger.error("Slink: could not start a handler task: #{inspect(reason)}")
+      end
     end
 
     :ok
@@ -53,7 +67,7 @@ defmodule Slink.Dispatcher do
     emit_received(module, event, context)
 
     task =
-      Task.Supervisor.async_nolink(Slink.TaskSupervisor, fn -> run(module, event, context) end)
+      Task.Supervisor.async_nolink(task_supervisor(), fn -> run(module, event, context) end)
 
     case Task.yield(task, ack_timeout()) || Task.shutdown(task, :brutal_kill) do
       {:ok, payload} when is_map(payload) -> encodable(payload)
@@ -167,6 +181,11 @@ defmodule Slink.Dispatcher do
   end
 
   defp ack_timeout, do: Application.get_env(:slink, :ack_timeout_ms, @default_ack_timeout_ms)
+
+  # Test seam: lets tests point dispatch at a capped supervisor without
+  # restarting the application (max_children is read at supervisor boot).
+  defp task_supervisor,
+    do: Application.get_env(:slink, :task_supervisor, Slink.TaskSupervisor)
 
   # Perform a reply if the handler asked for one via its return value; otherwise
   # do nothing. See `t:Slink.result/0`. Public (in this private module) so

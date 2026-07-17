@@ -20,6 +20,10 @@ defmodule Slink.Rate do
     * `config :slink, :rate_idle_stop_ms, 600_000` — a channel worker with
       nothing to do for this long stops itself (default 10 minutes), so posting
       to many channels doesn't accumulate idle workers.
+
+  `:rate_mode` and `:rate_sender` also exist but are **internal test seams**
+  (set by `Slink.Testing.run/3`): `:sync` performs sends inline with no
+  pacing, no queue bound and swallowed errors. Never set them in production.
   """
 
   require Logger

@@ -229,6 +229,31 @@ defmodule Slink.TestingTest do
       assert %{calls: []} = run(MeBot, mention, bot_user_id: "U9OTHER")
     end
 
+    test "concurrent run/3 calls serialize instead of corrupting the seams" do
+      defmodule SleepyBot do
+        use Slink
+
+        @impl true
+        def handle_event(_event, context) do
+          Process.sleep(30)
+          reply(context, "done")
+        end
+      end
+
+      tasks =
+        for _ <- 1..2 do
+          Task.async(fn -> run(SleepyBot, event(:app_mention, channel: "C-lock")) end)
+        end
+
+      for run <- Task.await_many(tasks, 5_000) do
+        assert [{"chat.postMessage", %{channel: "C-lock", text: "done"}}] = run.calls
+      end
+
+      # Both restored on the way out — no stale capture left installed.
+      assert Application.get_env(:slink, :api_caller) == nil
+      assert Application.get_env(:slink, :rate_mode, :async) == :async
+    end
+
     test "seams are restored after a run, even when the handler raises" do
       defmodule RaisingBot do
         use Slink

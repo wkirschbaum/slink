@@ -69,6 +69,33 @@ AI-app support (assistant threads + streamed replies).
   default and 429s waited out. Raises `Slink.API.Error` on a failed page (a
   lazy stream can't return an error tuple).
 
+
+- **`send_dm/4`** (imported by `use Slink`) — DM a user in one call:
+  `conversations.open` + a rate-limited post. Also `Slink.API.open_dm/2`.
+- **`reply(context, text, to: :ephemeral)`** — an only-the-invoker reply for
+  *any* event kind: interactions and slash commands go through their
+  `response_url`; plain events (a mention, a message) use `chat.postEphemeral`.
+- **`update_original/3`** (imported) — replace the message an interaction came
+  from via its `response_url` (`replace_original: true`): the canonical
+  "button click updates its own message" pattern, and it works on ephemeral
+  messages and in channels the bot isn't a member of.
+- **Interactions without a channel no longer make `reply/3` raise** — a click
+  on an ephemeral message, or in a channel the bot isn't in, falls back to the
+  interaction's `response_url` (ephemeral by default, `to: :channel` for
+  everyone) instead of failing.
+- **Bot self-identity.** `context.bot_user_id` carries the bot's own user id,
+  discovered via `auth.test` and cached per token by the new `Slink.Identity`
+  (async prewarm — never blocks a transport; `nil` until the one-off lookup
+  lands). Powers the imported **`mentions_me?/1`** — "am I mentioned in this
+  message?" for events that aren't an `:app_mention`.
+- **New `Slink.API` wrappers**: `schedule_message/5` (chat.scheduleMessage),
+  `join_channel/2` (conversations.join), `history/3` (conversations.history,
+  single page), `auth_test/1`, `open_dm/2`.
+- **`config :slink, :max_handler_tasks, N`** — an opt-in backpressure valve:
+  caps concurrently-running handler tasks (default `:infinity`, the previous
+  behaviour); past the cap the dispatcher sheds events with an error log
+  rather than letting an event flood spawn without bound.
+
 ### Fixed
 
 - **Slash commands and interactions now dedup on their Socket Mode
@@ -93,30 +120,6 @@ AI-app support (assistant threads + streamed replies).
   to chain actions with `with` (short-circuiting on the first
   `{:error, reason}`), and why the helpers compose with `with` rather than
   pipes.
-
-### Added (quality-of-life helpers)
-
-- **`send_dm/4`** (imported by `use Slink`) — DM a user in one call:
-  `conversations.open` + a rate-limited post. Also `Slink.API.open_dm/2`.
-- **`reply(context, text, to: :ephemeral)`** — an only-the-invoker reply for
-  *any* event kind: interactions and slash commands go through their
-  `response_url`; plain events (a mention, a message) use `chat.postEphemeral`.
-- **`update_original/3`** (imported) — replace the message an interaction came
-  from via its `response_url` (`replace_original: true`): the canonical
-  "button click updates its own message" pattern, and it works on ephemeral
-  messages and in channels the bot isn't a member of.
-- **Interactions without a channel no longer make `reply/3` raise** — a click
-  on an ephemeral message, or in a channel the bot isn't in, falls back to the
-  interaction's `response_url` (ephemeral by default, `to: :channel` for
-  everyone) instead of failing.
-- **Bot self-identity.** `context.bot_user_id` carries the bot's own user id,
-  discovered via `auth.test` and cached per token by the new `Slink.Identity`
-  (async prewarm — never blocks a transport; `nil` until the one-off lookup
-  lands). Powers the imported **`mentions_me?/1`** — "am I mentioned in this
-  message?" for events that aren't an `:app_mention`.
-- **New `Slink.API` wrappers**: `schedule_message/5` (chat.scheduleMessage),
-  `join_channel/2` (conversations.join), `history/3` (conversations.history,
-  single page), `auth_test/1`, `open_dm/2`.
 
 ## [0.5.1] - 2026-07-17
 

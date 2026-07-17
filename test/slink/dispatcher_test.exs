@@ -1,3 +1,63 @@
+defmodule Slink.DispatcherCapTest do
+  # async: false — sets the :task_supervisor app env seam.
+  use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
+
+  alias Slink.{Context, Dispatcher, Event}
+
+  defmodule BlockingBot do
+    use Slink
+
+    @impl true
+    def handle_event(_event, _context) do
+      send(:cap_sink, {:started, self()})
+
+      receive do
+        :go -> :ok
+      end
+    end
+  end
+
+  test "past :max_handler_tasks the dispatcher sheds events with an error log" do
+    Process.register(self(), :cap_sink)
+    {:ok, sup} = Task.Supervisor.start_link(max_children: 1)
+    Application.put_env(:slink, :task_supervisor, sup)
+    on_exit(fn -> Application.delete_env(:slink, :task_supervisor) end)
+
+    event = %Event{type: :message, payload: %{}, raw: %{}, transport: :socket_mode}
+    context = %Context{transport: :socket_mode, bot_token: nil}
+
+    # First event occupies the single slot…
+    Dispatcher.async(BlockingBot, event, context)
+    assert_receive {:started, blocked}, 1_000
+
+    # …the second is shed, loudly, without crashing the caller.
+    log =
+      capture_log(fn ->
+        assert :ok = Dispatcher.async(BlockingBot, event, context)
+        refute_receive {:started, _}, 200
+      end)
+
+    assert log =~ "handler task limit"
+    assert log =~ ":message"
+
+    # Release the slot; dispatch works again.
+    send(blocked, :go)
+    wait_for_free_slot(sup)
+    Dispatcher.async(BlockingBot, event, context)
+    assert_receive {:started, second}, 1_000
+    send(second, :go)
+  end
+
+  defp wait_for_free_slot(sup, attempts \\ 100) do
+    cond do
+      Task.Supervisor.children(sup) == [] -> :ok
+      attempts == 0 -> flunk("task slot never freed")
+      true -> Process.sleep(10) && wait_for_free_slot(sup, attempts - 1)
+    end
+  end
+end
+
 defmodule Slink.DispatcherTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
