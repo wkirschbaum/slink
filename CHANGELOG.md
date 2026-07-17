@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-17
+
+Quality-of-life helpers for the most common bot patterns: DMs, ephemeral
+replies, updating a clicked message, and knowing who the bot is.
+
+### Added
+
+- **`send_dm/4`** (imported by `use Slink`) — DM a user in one call:
+  `conversations.open` + a rate-limited post. Also `Slink.API.open_dm/2`.
+- **`reply(context, text, to: :ephemeral)`** — an only-the-invoker reply for
+  *any* event kind: interactions and slash commands go through their
+  `response_url`; plain events (a mention, a message) use `chat.postEphemeral`.
+- **`update_original/3`** (imported) — replace the message an interaction came
+  from via its `response_url` (`replace_original: true`): the canonical
+  "button click updates its own message" pattern, and it works on ephemeral
+  messages and in channels the bot isn't a member of.
+- **Interactions without a channel no longer make `reply/3` raise** — a click
+  on an ephemeral message, or in a channel the bot isn't in, falls back to the
+  interaction's `response_url` (ephemeral by default, `to: :channel` for
+  everyone) instead of failing.
+- **Bot self-identity.** `context.bot_user_id` carries the bot's own user id,
+  discovered via `auth.test` and cached per token by the new `Slink.Identity`
+  (async prewarm — never blocks a transport; `nil` until the one-off lookup
+  lands). Powers the imported **`mentions_me?/1`** — "am I mentioned in this
+  message?" for events that aren't an `:app_mention`.
+- **New `Slink.API` wrappers**: `schedule_message/5` (chat.scheduleMessage),
+  `join_channel/2` (conversations.join), `history/3` (conversations.history,
+  single page), `auth_test/1`, `open_dm/2`.
+
+### Documentation
+
+- ROADMAP: added a public testing module, one-call file uploads, Web API
+  pagination streams, Block Kit builder functions, and AI-assistant app
+  support (assistant events, status, streamed replies).
+
 ## [0.5.1] - 2026-07-17
 
 Bug-hunt pass over the whole library (three independent review lenses:

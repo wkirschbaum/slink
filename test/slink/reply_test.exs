@@ -177,6 +177,51 @@ defmodule Slink.ReplyTest do
     end
   end
 
+  describe "reply/3 with to: :ephemeral on a plain event" do
+    test "posts a chat.postEphemeral to the triggering user" do
+      test_pid = self()
+
+      Application.put_env(:slink, :rate_sender, fn _token, method, params ->
+        send(test_pid, {:sent, method, params})
+        {:ok, %{"ok" => true}}
+      end)
+
+      event = event("C-eph", %{"user" => "U-asker"})
+      assert :ok = Slink.reply(context(event), "just for you", to: :ephemeral)
+
+      assert_receive {:sent, "chat.postEphemeral",
+                      %{channel: "C-eph", user: "U-asker", text: "just for you"}},
+                     1_000
+    end
+
+    test "raises a clear error when the event has no user to address" do
+      event = event("C-eph-nouser")
+
+      assert_raise ArgumentError, ~r/to: :ephemeral/, fn ->
+        Slink.reply(context(event), "hi", to: :ephemeral)
+      end
+    end
+  end
+
+  describe "mentions_me?/1" do
+    test "true only when the bot's own id is mentioned and known" do
+      event = event("C-me", %{"text" => "<@U111ME> and <@U222OTHER>"})
+
+      me = %Context{
+        transport: :socket_mode,
+        bot_token: "xoxb",
+        bot_user_id: "U111ME",
+        event: event
+      }
+
+      assert Slink.mentions_me?(me)
+      refute Slink.mentions_me?(%{me | bot_user_id: "U333ELSE"})
+      # Identity not discovered yet — never a false positive, never a crash.
+      refute Slink.mentions_me?(%{me | bot_user_id: nil})
+      refute Slink.mentions_me?(%{me | event: nil})
+    end
+  end
+
   describe "handler return values (via Dispatcher)" do
     # Dispatcher embeds the event into the context, so pass a context without one.
     defp bare_context, do: %Context{transport: :socket_mode, bot_token: "xoxb"}

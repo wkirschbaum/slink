@@ -137,6 +137,42 @@ defmodule Slink do
   end
 
   @doc """
+  Send a direct message to `user`, using the bot token from the handler
+  `context` (imported by `use Slink`).
+
+  Opens (or resumes) the DM conversation via `conversations.open`, then posts
+  through `Slink.Rate` like `send_message/4`. `opts` merges into the request
+  body (`blocks:` etc.). Returns `:ok`, or `{:error, reason}` if the DM
+  couldn't be opened (e.g. the app lacks the `im:write` scope).
+
+      def handle_event(%Slink.Event{type: :team_join} = event, context) do
+        send_dm(context, Slink.Event.user(event), "welcome aboard 👋")
+      end
+  """
+  def send_dm(%Slink.Context{bot_token: token}, user, text, opts \\ []) do
+    case Slink.API.open_dm(token, user) do
+      {:ok, channel} -> Slink.Rate.post_message(token, channel, text, Map.new(opts))
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Whether the bot itself is @-mentioned in the event's text (imported by
+  `use Slink`).
+
+  Unlike matching on `:app_mention` — a whole event type — this answers the
+  question for *any* event carrying text, e.g. a `:message` in a thread the bot
+  is following. Compares against `context.bot_user_id`, which is discovered via
+  `auth.test` shortly after the transport starts; returns `false` while that's
+  still unknown (and `:app_mention` events don't need it anyway).
+  """
+  def mentions_me?(%Slink.Context{bot_user_id: id, event: %Slink.Event{} = event})
+      when is_binary(id),
+      do: Slink.Event.mentions?(event, id)
+
+  def mentions_me?(%Slink.Context{}), do: false
+
+  @doc """
   Whether the event happened inside a thread (imported by `use Slink`).
 
   Accepts either a `context` (like the other imported helpers) or a bare
@@ -165,6 +201,9 @@ defmodule Slink do
       started on the triggering message.
     * `:channel` — always inline in the channel timeline, even if the event was
       inside a thread.
+    * `:ephemeral` — visible **only to the user who triggered the event**, and
+      gone on reload. Interactions go through their `response_url`; plain
+      events (a mention, a message) use `chat.postEphemeral`.
 
   Every other key in `opts` is merged into the Slack request body, for **rich
   replies**: `blocks: [...]` (Block Kit), `attachments: [...]`, an explicit
@@ -174,6 +213,12 @@ defmodule Slink do
 
   For a **slash command** the reply goes to the command's `response_url` instead,
   with `to: :ephemeral` (default, only the invoker) or `to: :channel`.
+
+  An interaction with **no channel to post into** (a button on an ephemeral
+  message, a message in a channel the bot isn't a member of) falls back to its
+  `response_url` — ephemeral to the invoker, or in-channel with `to: :channel` —
+  rather than failing. To *replace* the message a button lives on instead of
+  posting a new one, see `update_original/3`.
   """
   def reply(context, text, opts \\ [])
 
@@ -199,12 +244,22 @@ defmodule Slink do
   end
 
   def reply(%Slink.Context{event: %Slink.Event{} = event} = context, text, opts) do
-    case Slink.Event.channel(event) do
-      channel when is_binary(channel) ->
-        {to, body} = Keyword.pop(opts, :to, :auto)
+    {to, body} = Keyword.pop(opts, :to, :auto)
+    channel = Slink.Event.channel(event)
+
+    cond do
+      to == :ephemeral ->
+        ephemeral_reply(context, event, channel, text, Map.new(body))
+
+      is_binary(channel) ->
         send_message(context, channel, text, thread(body, to, event))
 
-      _ ->
+      is_binary(Slink.Event.response_url(event)) ->
+        # No channel to post into (a click on an ephemeral message, a channel
+        # the bot isn't in) — Slack provides the response_url exactly for this.
+        respond_via_url(event, text, Map.new(body), responder_type(to))
+
+      true ->
         raise ArgumentError,
               "reply/3 has no channel for a #{inspect(event.type)} event (a global shortcut " <>
                 "or view interaction happens outside a channel); use open_modal/2 or " <>
@@ -216,6 +271,51 @@ defmodule Slink do
     raise ArgumentError,
           "reply/3 requires context.event; call it from a handler (the dispatcher sets the event) " <>
             "or use send_message/4 for an arbitrary channel"
+  end
+
+  # An ephemeral reply: interactions carry a response_url built for it (and it
+  # also works on ephemeral messages / non-member channels); plain events use
+  # chat.postEphemeral, which needs the channel and the triggering user.
+  defp ephemeral_reply(context, event, channel, text, body) do
+    cond do
+      url = Slink.Event.response_url(event) ->
+        params = Map.merge(body, %{text: text, response_type: "ephemeral"})
+        _ = Slink.API.respond(url, Map.put_new(params, :replace_original, false))
+        :ok
+
+      is_binary(channel) and is_binary(Slink.Event.user(event)) ->
+        params =
+          Map.merge(body, %{channel: channel, user: Slink.Event.user(event), text: text})
+
+        Slink.Rate.enqueue(context.bot_token, channel, "chat.postEphemeral", params)
+
+      true ->
+        raise ArgumentError,
+              "reply/3 with to: :ephemeral needs a response_url (interactions, slash commands) " <>
+                "or a channel and user (message events) — a #{inspect(event.type)} event has neither"
+    end
+  end
+
+  defp respond_via_url(event, text, body, response_type) do
+    params = Map.merge(body, %{text: text, response_type: response_type})
+
+    _ =
+      Slink.API.respond(
+        Slink.Event.response_url(event),
+        Map.put_new(params, :replace_original, false)
+      )
+
+    :ok
+  end
+
+  # Placement for the no-channel response_url fallback: :channel means everyone,
+  # anything thread-ish degrades to ephemeral (there is no thread to target).
+  defp responder_type(:channel), do: "in_channel"
+  defp responder_type(to) when to in [:auto, :thread], do: "ephemeral"
+
+  defp responder_type(other) do
+    raise ArgumentError,
+          "invalid `to: #{inspect(other)}` for a message reply; use :auto, :thread, :channel, or :ephemeral"
   end
 
   # Add thread_ts only when the placement is threaded and we actually have a
@@ -237,7 +337,8 @@ defmodule Slink do
 
   defp threaded?(other, _event) do
     raise ArgumentError,
-          "invalid `to: #{inspect(other)}` for a message reply; use :auto, :thread, or :channel"
+          "invalid `to: #{inspect(other)}` for a message reply; use :auto, :thread, :channel, " <>
+            "or :ephemeral"
   end
 
   defp slash_type(:ephemeral), do: "ephemeral"
@@ -271,6 +372,42 @@ defmodule Slink do
   def open_modal(%Slink.Context{bot_token: token, event: %Slink.Event{} = event}, view) do
     Slink.API.open_view(token, Slink.Event.trigger_id(event), view)
   end
+
+  @doc """
+  Replace the message this interaction came from (imported by `use Slink`).
+
+  The canonical "a button click updates its own message" pattern: posts to the
+  event's `response_url` with `replace_original: true`, so it also works on
+  ephemeral messages and in channels the bot isn't a member of — places
+  `Slink.API.update_message/5` can't reach. `opts` merges into the body
+  (`blocks:` etc.).
+
+      def handle_event(%Slink.Event{type: :block_actions} = event, context) do
+        update_original(context, "deploying \#{Event.action_value(event)}…")
+      end
+
+  Returns `:ok`, or `{:error, :no_response_url}` when the event carries none
+  (only slash commands and message interactions do — not plain events), or the
+  responder's `{:error, reason}`.
+  """
+  def update_original(context, text, opts \\ [])
+
+  def update_original(%Slink.Context{event: %Slink.Event{} = event}, text, opts) do
+    case Slink.Event.response_url(event) do
+      url when is_binary(url) ->
+        params = opts |> Map.new() |> Map.merge(%{text: text, replace_original: true})
+
+        case Slink.API.respond(url, params) do
+          {:ok, _body} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :no_response_url}
+    end
+  end
+
+  def update_original(%Slink.Context{event: nil}, _text, _opts), do: {:error, :no_response_url}
 
   @working_emoji "hourglass_flowing_sand"
   @working_delay_ms to_timeout(second: 3)
@@ -354,12 +491,17 @@ defmodule Slink do
         only: [
           send_message: 3,
           send_message: 4,
+          send_dm: 3,
+          send_dm: 4,
           reply: 2,
           reply: 3,
+          update_original: 2,
+          update_original: 3,
           working: 2,
           working: 3,
           open_modal: 2,
-          in_thread?: 1
+          in_thread?: 1,
+          mentions_me?: 1
         ]
     end
   end

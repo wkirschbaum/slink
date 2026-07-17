@@ -11,7 +11,9 @@ defmodule Slink.Application do
       {Registry, keys: :unique, name: Slink.Rate.Registry},
       {DynamicSupervisor, name: Slink.Rate.Supervisor, strategy: :one_for_one},
       # Remembers recently-seen event ids so retried deliveries dispatch once.
-      Slink.Dedup
+      Slink.Dedup,
+      # Caches auth.test per token so contexts can carry the bot's own user id.
+      Slink.Identity
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Slink.Supervisor)

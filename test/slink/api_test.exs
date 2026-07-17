@@ -74,6 +74,20 @@ defmodule Slink.APITest do
     assert {:ok, %{"ok" => true}} = API.publish_view("xoxb", "U1", %{})
   end
 
+  test "open_dm/2 returns the DM channel id" do
+    assert {:ok, "D1"} = API.open_dm("xoxb", "U1")
+  end
+
+  test "join_channel/2, history/3, schedule_message/5 and auth_test/1 succeed" do
+    assert {:ok, %{"channel" => %{"id" => "C1"}}} = API.join_channel("xoxb", "C1")
+    assert {:ok, %{"messages" => []}} = API.history("xoxb", "C1", %{limit: 5})
+
+    assert {:ok, %{"scheduled_message_id" => "Q1"}} =
+             API.schedule_message("xoxb", "C1", 1_700_000_000, "later")
+
+    assert {:ok, %{"user_id" => "U-BOT"}} = API.auth_test("xoxb")
+  end
+
   test "respond/2 posts to a response_url" do
     base = Application.get_env(:slink, :api_base_url)
     assert {:ok, _} = API.respond("#{base}/response", %{text: "hi", response_type: "ephemeral"})

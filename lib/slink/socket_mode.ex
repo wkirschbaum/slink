@@ -417,6 +417,8 @@ defmodule Slink.SocketMode do
   defp handle_message(%{"type" => "hello"}, state) do
     Logger.debug("Slink: received hello")
     join_channels(state)
+    # Discover the bot's own user id off-process so contexts can carry it.
+    Slink.Identity.prewarm(state.bot_token)
     # Slack accepted the connection — the next blip may retry fast again.
     %{state | backoff: 0}
   end
@@ -428,7 +430,12 @@ defmodule Slink.SocketMode do
 
   defp handle_message(%{"envelope_id" => id} = message, state) when is_binary(id) do
     event = Event.from_socket_mode(message)
-    context = %Context{transport: :socket_mode, bot_token: state.bot_token}
+
+    context = %Context{
+      transport: :socket_mode,
+      bot_token: state.bot_token,
+      bot_user_id: Slink.Identity.bot_user_id(state.bot_token)
+    }
 
     if Dispatcher.sync_ack?(event) do
       # A modal submit: Slack wants the response in the ACK, so run the handler
@@ -462,7 +469,7 @@ defmodule Slink.SocketMode do
   defp join_channels(%{join: channels, bot_token: token}) do
     Task.Supervisor.start_child(Slink.TaskSupervisor, fn ->
       Enum.each(channels, fn channel ->
-        case API.call(token, "conversations.join", %{channel: channel}) do
+        case API.join_channel(token, channel) do
           {:ok, _} -> Logger.debug("Slink: joined #{channel}")
           {:error, reason} -> Logger.warning("Slink: join #{channel} failed: #{inspect(reason)}")
         end

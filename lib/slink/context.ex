@@ -7,6 +7,10 @@ defmodule Slink.Context do
     * `:transport` — `:socket_mode` or `:http`, whichever delivered the event.
     * `:bot_token` — the bot token (`xoxb-…`) for Web API calls, e.g. via
       `send_message/4`. May be `nil` if the transport was started without one.
+    * `:bot_user_id` — the bot's own user id (`U…`), discovered via `auth.test`
+      and cached by `Slink.Identity`. Powers `Slink.mentions_me?/1` and lets a
+      handler tell its own posts apart. `nil` until the one-off lookup lands
+      (shortly after connect / the first event).
     * `:event` — the `Slink.Event` being handled. Carried here so `reply/3` needs
       only the context (channel and thread come from the event, the token from
       the context). Set by the dispatcher before your handler runs.
@@ -18,11 +22,12 @@ defmodule Slink.Context do
   # this closes the same leak on the handler side.
   @derive {Inspect, except: [:bot_token]}
   @enforce_keys [:transport]
-  defstruct [:transport, :bot_token, :event]
+  defstruct [:transport, :bot_token, :bot_user_id, :event]
 
   @type t :: %__MODULE__{
           transport: :socket_mode | :http,
           bot_token: String.t() | nil,
+          bot_user_id: String.t() | nil,
           event: Slink.Event.t() | nil
         }
 end

@@ -161,7 +161,16 @@ defmodule Slink.EventsApi.Plug do
   # response into the reply (view_submission) or ACK now and dispatch off-process.
   defp handle(conn, params, opts, normalize) do
     event = normalize.(params)
-    context = %Slink.Context{transport: :http, bot_token: resolve(opts.bot_token, event)}
+    bot_token = resolve(opts.bot_token, event)
+    # Kick off the one-time auth.test for this token (a no-op once cached), and
+    # stamp whatever's already known — the first event or two may carry nil.
+    Slink.Identity.prewarm(bot_token)
+
+    context = %Slink.Context{
+      transport: :http,
+      bot_token: bot_token,
+      bot_user_id: Slink.Identity.bot_user_id(bot_token)
+    }
 
     if Dispatcher.sync_ack?(event) do
       ack_response(conn, Dispatcher.ack_result(opts.module, event, context))

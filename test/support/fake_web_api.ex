@@ -72,6 +72,13 @@ defmodule Slink.Test.FakeWebApi do
     defp json(["chat.postEphemeral"]), do: %{"ok" => true, "message_ts" => "1.2"}
     defp json(["chat.getPermalink"]), do: %{"ok" => true, "permalink" => "https://slack/p1"}
     defp json(["conversations.join"]), do: %{"ok" => true, "channel" => %{"id" => "C1"}}
+    defp json(["conversations.open"]), do: %{"ok" => true, "channel" => %{"id" => "D1"}}
+
+    defp json(["conversations.history"]),
+      do: %{"ok" => true, "messages" => [], "response_metadata" => %{"next_cursor" => ""}}
+
+    defp json(["chat.scheduleMessage"]), do: %{"ok" => true, "scheduled_message_id" => "Q1"}
+    defp json(["auth.test"]), do: %{"ok" => true, "user_id" => "U-BOT", "team_id" => "T1"}
     defp json(["users.info"]), do: %{"ok" => true, "user" => %{"id" => "U1", "name" => "alice"}}
     defp json(["reactions.add"]), do: %{"ok" => true}
     defp json(["reactions.remove"]), do: %{"ok" => true}

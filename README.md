@@ -176,9 +176,11 @@ def handle_event(%Event{type: :app_mention} = _event, context) do
 end
 
 def handle_event(%Event{type: :block_actions} = event, context) do
-  # The click arrives as its own event. reply/3 posts on the message the button
-  # is on; action_id/1 says which button, action_value/1 its value.
-  reply(context, "Deploying #{Event.action_value(event)} 🚀")
+  # The click arrives as its own event. update_original/3 swaps the message the
+  # button is on ("click → the message becomes the result"); or reply/3 posts a
+  # new one — to: :ephemeral answers only the clicker, and clicks on ephemeral
+  # messages route through the interaction's response_url automatically.
+  update_original(context, "Deploying #{Event.action_value(event)} 🚀")
 end
 
 def handle_event(%Event{type: :slash_commands} = event, context) do
@@ -212,11 +214,16 @@ You have room to choose *how* to respond:
 
 - **Return a value** — `:ok`, `{:reply, text}` / `{:reply, text, opts}`, or (for a
   modal submit) `{:ack, map}`. The simplest path.
-- **Call a helper** — `reply/3` (routes to a thread, channel, or `response_url`
-  as the event demands), `send_message/4`, `open_modal/2`, `working/3`.
+- **Call a helper** — `reply/3` (routes to a thread, channel, ephemeral view, or
+  `response_url` as the event and `to:` demand), `update_original/3`,
+  `send_message/4`, `send_dm/4`, `open_modal/2`, `working/3`, `mentions_me?/1`.
 - **Call the Web API directly** — `Slink.API` (`post_ephemeral/5`,
-  `update_message/5`, `views.*`, `respond/2`, …) for anything the helpers don't
-  cover.
+  `update_message/5`, `schedule_message/5`, `open_dm/2`, `history/3`, `views.*`,
+  `respond/2`, …) for anything the helpers don't cover.
+
+The handler context also carries the bot's own identity: `context.bot_user_id`
+(discovered via `auth.test`, cached) powers `mentions_me?/1` — "was I mentioned
+in this thread message?" — without an `:app_mention` event.
 
 Over the Events API, point the app's **Interactivity** and **Slash Commands**
 Request URLs at the same endpoint as events; Slink decodes all three. Slack

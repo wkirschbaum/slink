@@ -89,6 +89,60 @@ defmodule Slink.API do
     end
   end
 
+  @doc """
+  Schedule a message for later with `chat.scheduleMessage`.
+
+  `post_at` is a Unix timestamp (seconds). `opts` is merged into the body
+  (e.g. `%{thread_ts: ...}`). Needs the `chat:write` scope.
+  """
+  def schedule_message(bot_token, channel, post_at, text, opts \\ %{}) do
+    call(
+      bot_token,
+      "chat.scheduleMessage",
+      Map.merge(%{channel: channel, post_at: post_at, text: text}, opts)
+    )
+  end
+
+  @doc """
+  Open (or resume) a direct message with `user` via `conversations.open`.
+
+  Returns `{:ok, channel_id}` — the DM channel to post into (see
+  `Slink.send_dm/4` for the one-call version). Needs the `im:write` scope.
+  """
+  def open_dm(bot_token, user) do
+    case call(bot_token, "conversations.open", %{users: user}) do
+      {:ok, %{"channel" => %{"id" => id}}} -> {:ok, id}
+      {:ok, body} -> {:error, {:no_channel, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Join a public channel with `conversations.join`. Needs the `channels:join` scope."
+  def join_channel(bot_token, channel) do
+    call(bot_token, "conversations.join", %{channel: channel})
+  end
+
+  @doc """
+  Fetch one page of a channel's message history with `conversations.history`.
+
+  `opts` is merged into the body — most usefully `%{limit: ..., cursor: ...}`
+  for paging (the next cursor is in `body["response_metadata"]["next_cursor"]`).
+  Needs the relevant `*:history` scope for the conversation type.
+  """
+  def history(bot_token, channel, opts \\ %{}) do
+    call(bot_token, "conversations.history", Map.merge(%{channel: channel}, opts))
+  end
+
+  @doc """
+  Who this token authenticates as, via `auth.test`.
+
+  The body's `"user_id"` is the bot's own user id (`Slink.Identity` caches this
+  to power `context.bot_user_id` and `Slink.mentions_me?/1`).
+  """
+  def auth_test(token) do
+    call(token, "auth.test", %{})
+  end
+
   @doc "Look up a user's profile with `users.info`. Needs the `users:read` scope."
   def user_info(bot_token, user) do
     call(bot_token, "users.info", %{user: user})
