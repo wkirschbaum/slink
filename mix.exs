@@ -74,11 +74,17 @@ defmodule Slink.MixProject do
       source_url: @source_url,
       extras: [
         "README.md",
+        {"guides/interactivity.md", [title: "Slash commands, buttons & modals"]},
         {"guides/composing.md", [title: "Composing helpers"]},
+        {"guides/ai-apps.md", [title: "AI apps"]},
+        {"guides/multi-workspace.md", [title: "Serving many workspaces"]},
+        {"guides/testing.md", [title: "Testing your bot"]},
+        {"guides/production.md", [title: "Going to production"]},
         "CHANGELOG.md",
         "ROADMAP.md",
         {:LICENSE, [title: "License"]}
       ],
+      groups_for_extras: [Guides: ~r{guides/}],
       groups_for_modules: [
         Transports: [Slink.SocketMode, Slink.EventsApi.Plug],
         "Web API": [Slink.API, Slink.API.Error, Slink.Rate, Slink.Rate.Channel, Slink.Identity],

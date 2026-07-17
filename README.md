@@ -151,110 +151,26 @@ In Slack, invite the bot to a channel with `/invite @slink`, then mention it:
 
 ## Beyond messages — slash commands, buttons & modals
 
-The same `handle_event/2` handles slash commands and interactive components, over
-either transport. Match on the event `type`; reply the same way you always do.
+The same `handle_event/2` handles slash commands, button clicks, and modals —
+match on the event `type` and respond the way you always do. `Slink.BlockKit`
+builds the block maps without a DSL:
 
 ```elixir
-def handle_event(%Event{type: :app_mention} = _event, context) do
-  # Reply with a button: any reply can carry Block Kit `blocks`. `action_id`
-  # identifies the button when it's clicked; `value` rides along with the click.
-  reply(context, "Ready to deploy?",
-    blocks: [
-      %{
-        type: "actions",
-        elements: [
-          %{
-            type: "button",
-            action_id: "deploy",
-            text: %{type: "plain_text", text: "Deploy"},
-            value: "prod"
-          }
-        ]
-      }
-    ]
-  )
-end
-
 def handle_event(%Event{type: :block_actions} = event, context) do
-  # The click arrives as its own event. update_original/3 swaps the message the
-  # button is on ("click → the message becomes the result"); or reply/3 posts a
-  # new one — to: :ephemeral answers only the clicker, and clicks on ephemeral
-  # messages route through the interaction's response_url automatically.
   update_original(context, "Deploying #{Event.action_value(event)} 🚀")
 end
-
-def handle_event(%Event{type: :slash_commands} = event, context) do
-  # Slash commands reply through their response_url — reply/3 handles that.
-  # to: :ephemeral (default) shows only the invoker; to: :channel posts publicly.
-  reply(context, "running `#{Event.text(event)}`…", to: :channel)
-end
-
-def handle_event(%Event{type: :shortcut} = _event, context) do
-  # Open a modal. Uses the event's trigger_id (valid ~3s), so open promptly.
-  # open_modal/2 returns {:ok, response} | {:error, reason}; a handler can just
-  # end with it (a non-{:reply, _} return means "nothing to reply"). Match it
-  # when you need response["view"]["id"] for a later update_view/3 / push_view/3.
-  open_modal(context, my_view())
-end
-
-def handle_event(%Event{type: :view_submission} = event, _context) do
-  # A modal submit. Return {:ack, map} to control the modal; this one runs
-  # synchronously so keep it quick. Anything else closes the modal.
-  case Event.view_values(event) do
-    %{"email" => %{"input" => %{"value" => v}}} when v == "" ->
-      {:ack, %{response_action: "errors", errors: %{"email" => "required"}}}
-
-    _ ->
-      :ok
-  end
-end
 ```
 
-You have room to choose *how* to respond:
-
-- **Return a value** — `:ok`, `{:reply, text}` / `{:reply, text, opts}`, or (for a
-  modal submit) `{:ack, map}`. The simplest path.
-- **Call a helper** — `reply/3` (routes to a thread, channel, ephemeral view, or
-  `response_url` as the event and `to:` demand), `update_original/3`,
-  `send_message/4`, `send_dm/4`, `open_modal/2`, `working/3`, `mentions_me?/1`.
-- **Call the Web API directly** — `Slink.API` (`post_ephemeral/5`,
-  `update_message/5`, `schedule_message/5`, `open_dm/2`, `upload_file/3`,
-  `stream/3` for cursor pagination, `views.*`, `respond/2`, …) for anything
-  the helpers don't cover.
-
-The handler context also carries the bot's own identity: `context.bot_user_id`
-(discovered via `auth.test`, cached) powers `mentions_me?/1` — "was I mentioned
-in this thread message?" — without an `:app_mention` event.
-
-The helpers are built to combine with `with` — consistent `:ok` /
-`{:error, reason}` shapes, so a chain of actions short-circuits on the first
-failure. See the [Composing helpers](guides/composing.md) guide.
-
-Over the Events API, point the app's **Interactivity** and **Slash Commands**
-Request URLs at the same endpoint as events; Slink decodes all three. Slack
-retries deliveries it doesn't see ACKed — Slink drops the duplicates
-(`Slink.Dedup`) so your handler fires once.
-
-Block maps getting verbose? `Slink.BlockKit` has plain builder functions —
-no DSL, they just return the maps:
-
-```elixir
-import Slink.BlockKit
-
-reply(context, "Ready to deploy?",
-  blocks: [
-    section("*prod* is 3 commits behind — ship it?"),
-    actions([button("Deploy", action_id: "deploy", value: "prod", style: "primary")])
-  ])
-```
+→ **[Slash commands, buttons & modals](guides/interactivity.md)** — the full
+tour, including modals, Block Kit builders, and how replies route. For
+chaining helpers with `with`, see **[Composing helpers](guides/composing.md)**.
 
 ## AI apps — assistant threads & streamed replies
 
-Slink covers Slack's AI-app surface: the `:assistant_thread_started` /
-`:assistant_thread_context_changed` events normalise like any other, and
-handlers get `set_status/2` ("is thinking…") plus `stream_reply/3`, which
-renders any enumerable of text chunks — an LLM token stream — as one live,
-progressively-updating message:
+Assistant events normalise like any other; `set_status/2` shows "is
+thinking…", and `stream_reply/3` renders an LLM token stream as one live,
+progressively-updating message — degrading to a plain reply where streaming
+isn't enabled:
 
 ```elixir
 def handle_event(%Event{type: :message} = event, context) do
@@ -263,106 +179,38 @@ def handle_event(%Event{type: :message} = event, context) do
 end
 ```
 
-Chunks are batched under Slack's rate limits, and if the surface can't stream,
-the reply degrades to a single message — it always arrives. Suggested prompts
-and thread titles are on `Slink.API` (`set_suggested_prompts/5`,
-`set_thread_title/4`). Requires the `assistant:write` scope and the Agents
-toggle in the app config.
+→ **[AI apps](guides/ai-apps.md)** — assistant threads, suggested prompts,
+streaming semantics, scopes.
 
 ## Testing your bot
 
-`Slink.Testing` makes handlers unit-testable without Slack: build a realistic
-event fixture, run the handler, and assert on what it sent — synchronously,
-nothing touches the network:
+`Slink.Testing` runs a handler against realistic fixtures with every Slack
+call captured — offline and synchronous; `mix slink.smoke` live-checks a real
+token and workspace (including whether AI streaming is enabled):
 
 ```elixir
-defmodule MyBotTest do
-  use ExUnit.Case, async: false
-  import Slink.Testing
-
-  test "greets a mention in its thread" do
-    run = run(MyBot, event(:app_mention, text: "<@U1BOT> hi", thread_ts: "1.0"))
-
-    assert [{"chat.postMessage", %{text: "hi" <> _, thread_ts: "1.0"}}] = run.calls
-  end
-end
+run = run(MyBot, event(:app_mention, text: "<@U1BOT> hi"))
+assert [{"chat.postMessage", %{text: "hi" <> _}}] = run.calls
 ```
 
-Fixtures exist for mentions, messages, reactions, slash commands, button
-clicks, modal submits, assistant threads and more — see
-`Slink.Testing.event/2`. Failure paths are scriptable via the `:api` option.
+→ **[Testing your bot](guides/testing.md)**
 
-For the *live* half — verifying a real token and workspace, including whether
-AI streaming is enabled for your app — run the smoke test against a private
-testing channel:
+## Going to production
 
-```bash
-SLACK_BOT_TOKEN=xoxb-... mix slink.smoke C0123456789
-```
+Run the Events API plug (standalone Bandit or mounted in Phoenix), or stay on
+Socket Mode with `connections: 2` for high availability. Signature
+verification, ACK windows, retries, rate limiting, and secrets hygiene are
+handled; telemetry and the operational knobs are documented alongside.
 
-## Going to production — Events API (HTTP)
+→ **[Going to production](guides/production.md)**
 
-For production Slack recommends HTTP over Socket Mode (see the table below).
-You'll need a public HTTPS endpoint. Run the plug with Bandit:
+## Serving many workspaces
 
-```elixir
-Bandit.start_link(
-  plug: {Slink.EventsApi.Plug,
-         module: MyBot,
-         signing_secret: System.fetch_env!("SLACK_SIGNING_SECRET"),
-         bot_token: System.fetch_env!("SLACK_BOT_TOKEN")},
-  port: 4000
-)
-```
+Both transports route a per-workspace token; `Slink.OAuth` +
+`Slink.OAuth.Plug` handle the "Add to Slack" consent flow and code exchange —
+you own only the token store.
 
-…or mount it in an existing Plug/Phoenix router. Pass the secrets as functions —
-Phoenix evaluates `forward` options at compile time in production — and mount it
-where the raw body is still readable (before `Plug.Parsers`; see the
-`Slink.EventsApi.Plug` docs):
-
-```elixir
-forward "/slack/events", to: Slink.EventsApi.Plug,
-  init_opts: [module: MyBot,
-              signing_secret: fn -> System.fetch_env!("SLACK_SIGNING_SECRET") end,
-              bot_token: fn -> System.fetch_env!("SLACK_BOT_TOKEN") end]
-```
-
-Then in the app's manifest/settings: set `"socket_mode_enabled": false`, add your
-public URL as the **Request URL** under **Event Subscriptions**
-(`https://your-host/slack/events`), and copy the **Signing Secret** from
-**Basic Information** into `SLACK_SIGNING_SECRET`. Slink answers Slack's
-`url_verification` handshake and verifies every request's signature automatically.
-
-The same `MyBot` works unchanged across both transports.
-
-Staying on Socket Mode in production instead? Hold two connections open so a
-drop never loses events — Slack load-balances across them and Slink dedups:
-
-```elixir
-{Slink.SocketMode, module: MyBot, connections: 2, app_token: ..., bot_token: ...}
-```
-
-## Serving many workspaces — the OAuth install flow
-
-Both transports already route a per-workspace token (see *Multiple workspaces*
-in the module docs). To *acquire* those tokens as workspaces install your app,
-send installers to `Slink.OAuth.authorize_url/1` and mount `Slink.OAuth.Plug`
-at the app's Redirect URL — it exchanges the returned code and hands the result
-to your store:
-
-```elixir
-forward "/slack/oauth/callback", to: Slink.OAuth.Plug,
-  init_opts: [
-    client_id: "1234.5678",
-    client_secret: fn -> System.fetch_env!("SLACK_CLIENT_SECRET") end,
-    install: fn install -> MyApp.Installs.put(install.team_id, install.bot_token) end
-  ]
-```
-
-Persistence stays yours: store `{team_id, bot_token}` however you like, and
-hand it back per request via the `:bot_token` resolver. The `:install`
-callback must return `:ok` — anything else (or a raise) answers the installer
-with a 500 rather than claiming success.
+→ **[Serving many workspaces](guides/multi-workspace.md)**
 
 ## Transport choice, per Slack's own guidance
 
@@ -372,18 +220,6 @@ with a 500 rather than claiming success.
 | Slack recommends for | development, internal, behind-firewall | **production**, reliability, scale |
 | Marketplace / distributed apps | ✗ not allowed | ✓ required |
 | Concurrency | capped at 10 connections/app | scales horizontally |
-
-## Telemetry
-
-Slink emits [`:telemetry`](https://hexdocs.pm/telemetry) events you can attach
-to for logging or metrics. All carry `%{system_time: System.system_time()}` as
-the measurement:
-
-| Event | Metadata | When |
-|---|---|---|
-| `[:slink, :event, :received]` | `%{type:, transport:, module:}` | an event arrives, before dispatch |
-| `[:slink, :socket, :connected]` | `%{module:}` | the Socket Mode WebSocket handshake completes |
-| `[:slink, :socket, :disconnected]` | `%{module:}` | a live Socket Mode connection drops |
 
 ## Roadmap
 

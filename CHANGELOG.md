@@ -116,10 +116,11 @@ AI-app support (assistant threads + streamed replies).
 
 ### Documentation
 
-- New hexdocs guide, **Composing helpers**: the return-shape conventions, how
-  to chain actions with `with` (short-circuiting on the first
-  `{:error, reason}`), and why the helpers compose with `with` rather than
-  pipes.
+- **A guide per feature area** on hexdocs: *Slash commands, buttons & modals*,
+  *Composing helpers* (the return-shape conventions and `with` chaining),
+  *AI apps*, *Serving many workspaces* (routing + OAuth), *Testing your bot*,
+  and *Going to production* (deployment, operational knobs, telemetry,
+  secrets hygiene). The README slims down to teasers linking into them.
 
 ## [0.5.1] - 2026-07-17
 
