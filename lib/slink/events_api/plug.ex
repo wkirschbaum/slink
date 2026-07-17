@@ -49,8 +49,9 @@ defmodule Slink.EventsApi.Plug do
           bot_token: fn team_id -> MyApp.Installs.bot_token(team_id) end
         ]
 
-  Acquiring and storing those per-team tokens (the OAuth install flow) is yours
-  to own — Slink only routes to them.
+  Acquiring those per-team tokens is handled by `Slink.OAuth` (the "Add to
+  Slack" consent URL, code exchange, and callback plug); storing them stays
+  yours — Slink routes to whatever your `:bot_token` resolver returns.
 
   ## Mounting in Phoenix
 

@@ -88,6 +88,110 @@ defmodule Slink.APITest do
     assert {:ok, %{"user_id" => "U-BOT"}} = API.auth_test("xoxb")
   end
 
+  test "upload_file/3 runs the three-step external flow end to end" do
+    Application.put_env(:slink, :test_api_sink, self())
+    on_exit(fn -> Application.delete_env(:slink, :test_api_sink) end)
+
+    assert {:ok, %{"files" => [%{"id" => "F1"}]}} =
+             API.upload_file("xoxb", "col1,col2\n1,2\n",
+               filename: "report.csv",
+               channel: "C1",
+               initial_comment: "this week's numbers"
+             )
+
+    # getUploadURLExternal is form-encoded (the method rejects JSON) and
+    # carries the exact byte length.
+    assert_receive {:api_request, "/files.getUploadURLExternal", params}, 1_000
+    assert params == %{"filename" => "report.csv", "length" => "14"}
+
+    assert_receive {:api_request, "/upload/bytes", "col1,col2\n1,2\n"}, 1_000
+
+    assert_receive {:api_request, "/files.completeUploadExternal",
+                    %{
+                      "files" => [%{"id" => "F1"}],
+                      "channel_id" => "C1",
+                      "initial_comment" => "this week's numbers"
+                    }},
+                   1_000
+  end
+
+  test "upload_file/3 surfaces a failure to get the upload URL" do
+    Application.put_env(:slink, :api_base_url, "http://127.0.0.1:1")
+    assert {:error, _reason} = API.upload_file("xoxb", "bytes", filename: "x.txt")
+  end
+
+  describe "stream/3" do
+    setup do
+      on_exit(fn -> Application.delete_env(:slink, :api_caller) end)
+      :ok
+    end
+
+    defp script_pages(test_pid) do
+      Application.put_env(:slink, :api_caller, fn _token, "conversations.history", params ->
+        send(test_pid, {:page_fetched, params[:cursor]})
+
+        case params[:cursor] do
+          nil ->
+            {:ok,
+             %{
+               "ok" => true,
+               "messages" => [1, 2],
+               "response_metadata" => %{"next_cursor" => "c2"}
+             }}
+
+          "c2" ->
+            {:ok,
+             %{"ok" => true, "messages" => [3], "response_metadata" => %{"next_cursor" => ""}}}
+        end
+      end)
+    end
+
+    test "follows next_cursor to the end" do
+      script_pages(self())
+
+      messages =
+        API.stream("xoxb", "conversations.history", %{channel: "C1"})
+        |> Enum.flat_map(& &1["messages"])
+
+      assert messages == [1, 2, 3]
+    end
+
+    test "is lazy: fetches only the pages the consumer demands" do
+      script_pages(self())
+
+      [page] = API.stream("xoxb", "conversations.history", %{channel: "C1"}) |> Enum.take(1)
+      assert page["messages"] == [1, 2]
+
+      assert_receive {:page_fetched, nil}
+      refute_receive {:page_fetched, "c2"}, 100
+    end
+
+    test "defaults limit to 200 without clobbering an explicit one" do
+      test_pid = self()
+
+      Application.put_env(:slink, :api_caller, fn _token, _method, params ->
+        send(test_pid, {:limit, params[:limit]})
+        {:ok, %{"ok" => true}}
+      end)
+
+      API.stream("xoxb", "users.list") |> Enum.to_list()
+      assert_receive {:limit, 200}
+
+      API.stream("xoxb", "users.list", %{limit: 5}) |> Enum.to_list()
+      assert_receive {:limit, 5}
+    end
+
+    test "a failing page raises Slink.API.Error" do
+      Application.put_env(:slink, :api_caller, fn _token, _method, _params ->
+        {:error, "invalid_cursor"}
+      end)
+
+      assert_raise Slink.API.Error, ~r/invalid_cursor/, fn ->
+        API.stream("xoxb", "conversations.history", %{channel: "C1"}) |> Enum.to_list()
+      end
+    end
+  end
+
   test "respond/2 posts to a response_url" do
     base = Application.get_env(:slink, :api_base_url)
     assert {:ok, _} = API.respond("#{base}/response", %{text: "hi", response_type: "ephemeral"})

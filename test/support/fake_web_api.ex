@@ -46,6 +46,22 @@ defmodule Slink.Test.FakeWebApi do
       |> send_resp(429, JSON.encode!(%{"error" => "ratelimited"}))
     end
 
+    # The external upload flow: hand out an upload URL pointing back at this
+    # server, accept the bytes there.
+    defp respond(conn, ["files.getUploadURLExternal"]) do
+      body = %{
+        "ok" => true,
+        "upload_url" => "http://127.0.0.1:#{conn.port}/upload/bytes",
+        "file_id" => "F1"
+      }
+
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(200, JSON.encode!(body))
+    end
+
+    defp respond(conn, ["upload", "bytes"]), do: send_resp(conn, 200, "OK")
+
     defp respond(conn, path) do
       conn
       |> put_resp_content_type("application/json")
@@ -53,14 +69,24 @@ defmodule Slink.Test.FakeWebApi do
     end
 
     # Optional observability: if a test registered a sink pid, forward requests.
+    # Bodies are JSON for Web API methods, form-encoded for oauth.v2.access and
+    # files.getUploadURLExternal, and raw bytes for the upload endpoint.
     defp report(path_info, raw) do
       case Application.get_env(:slink, :test_api_sink) do
         pid when is_pid(pid) ->
-          params = with {:ok, map} <- JSON.decode(raw), do: map, else: (_ -> raw)
-          send(pid, {:api_request, "/" <> Enum.join(path_info, "/"), params})
+          send(pid, {:api_request, "/" <> Enum.join(path_info, "/"), decode(path_info, raw)})
 
         _ ->
           :ok
+      end
+    end
+
+    defp decode(["upload", "bytes"], raw), do: raw
+
+    defp decode(_path, raw) do
+      case JSON.decode(raw) do
+        {:ok, map} -> map
+        _ -> URI.decode_query(raw)
       end
     end
 
@@ -78,7 +104,31 @@ defmodule Slink.Test.FakeWebApi do
       do: %{"ok" => true, "messages" => [], "response_metadata" => %{"next_cursor" => ""}}
 
     defp json(["chat.scheduleMessage"]), do: %{"ok" => true, "scheduled_message_id" => "Q1"}
+
+    defp json(["files.completeUploadExternal"]),
+      do: %{"ok" => true, "files" => [%{"id" => "F1", "title" => "report"}]}
+
     defp json(["auth.test"]), do: %{"ok" => true, "user_id" => "U-BOT", "team_id" => "T1"}
+    defp json(["assistant.threads.setStatus"]), do: %{"ok" => true}
+    defp json(["assistant.threads.setTitle"]), do: %{"ok" => true}
+    defp json(["assistant.threads.setSuggestedPrompts"]), do: %{"ok" => true}
+    defp json(["chat.startStream"]), do: %{"ok" => true, "channel" => "D1", "ts" => "9.1"}
+    defp json(["chat.appendStream"]), do: %{"ok" => true, "channel" => "D1", "ts" => "9.1"}
+    defp json(["chat.stopStream"]), do: %{"ok" => true, "channel" => "D1", "ts" => "9.1"}
+
+    defp json(["oauth.v2.access"]) do
+      %{
+        "ok" => true,
+        "access_token" => "xoxb-installed-secret",
+        "token_type" => "bot",
+        "bot_user_id" => "U-BOT",
+        "app_id" => "A1",
+        "team" => %{"id" => "T-NEW", "name" => "Acme"},
+        "enterprise" => nil,
+        "authed_user" => %{"id" => "U-INSTALLER"}
+      }
+    end
+
     defp json(["users.info"]), do: %{"ok" => true, "user" => %{"id" => "U1", "name" => "alice"}}
     defp json(["reactions.add"]), do: %{"ok" => true}
     defp json(["reactions.remove"]), do: %{"ok" => true}

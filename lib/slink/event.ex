@@ -45,6 +45,7 @@ defmodule Slink.Event do
     member_joined_channel member_left_channel
     team_join
     tokens_revoked app_uninstalled
+    assistant_thread_started assistant_thread_context_changed
     slash_commands interactive url_verification
     block_actions view_submission view_closed shortcut message_action
   )a
@@ -90,6 +91,11 @@ defmodule Slink.Event do
       when type in [:reaction_added, :reaction_removed],
       do: dig(payload, ["item", "channel"])
 
+  # Assistant threads live in the app's DM; the id sits inside assistant_thread.
+  def channel(%__MODULE__{type: type, payload: payload})
+      when type in [:assistant_thread_started, :assistant_thread_context_changed],
+      do: dig(payload, ["assistant_thread", "channel_id"])
+
   def channel(%__MODULE__{payload: payload}), do: payload["channel"]
 
   @doc "The event's text, or an empty string."
@@ -109,6 +115,11 @@ defmodule Slink.Event do
   """
   def user(%__MODULE__{kind: :interactive, payload: payload}), do: dig(payload, ["user", "id"])
   def user(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["user_id"]
+
+  def user(%__MODULE__{type: type, payload: payload})
+      when type in [:assistant_thread_started, :assistant_thread_context_changed],
+      do: dig(payload, ["assistant_thread", "user_id"])
+
   def user(%__MODULE__{payload: payload}), do: payload["user"]
 
   # A Slack user mention in message text looks like `<@U0123ABCD>`, and sometimes
@@ -201,6 +212,10 @@ defmodule Slink.Event do
   """
   def thread_ts(%__MODULE__{kind: :interactive, payload: payload}),
     do: dig(payload, ["message", "thread_ts"]) || dig(payload, ["container", "thread_ts"])
+
+  def thread_ts(%__MODULE__{type: type, payload: payload})
+      when type in [:assistant_thread_started, :assistant_thread_context_changed],
+      do: dig(payload, ["assistant_thread", "thread_ts"])
 
   def thread_ts(%__MODULE__{payload: payload}), do: payload["thread_ts"]
 

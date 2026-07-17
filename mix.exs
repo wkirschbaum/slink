@@ -1,7 +1,7 @@
 defmodule Slink.MixProject do
   use Mix.Project
 
-  @version "0.6.0"
+  @version "0.8.0"
   @source_url "https://github.com/wkirschbaum/slink"
 
   def project do
@@ -72,11 +72,21 @@ defmodule Slink.MixProject do
       main: "readme",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md", "CHANGELOG.md", "ROADMAP.md", {:LICENSE, [title: "License"]}],
+      extras: [
+        "README.md",
+        {"guides/composing.md", [title: "Composing helpers"]},
+        "CHANGELOG.md",
+        "ROADMAP.md",
+        {:LICENSE, [title: "License"]}
+      ],
       groups_for_modules: [
         Transports: [Slink.SocketMode, Slink.EventsApi.Plug],
-        "Web API": [Slink.API, Slink.Rate],
-        Events: [Slink.Event, Slink.Context]
+        "Web API": [Slink.API, Slink.API.Error, Slink.Rate, Slink.Rate.Channel, Slink.Identity],
+        Events: [Slink.Event, Slink.Context, Slink.Dedup],
+        "Block Kit": [Slink.BlockKit],
+        Installation: [Slink.OAuth, Slink.OAuth.Install, Slink.OAuth.Plug],
+        Testing: [Slink.Testing, Slink.Testing.Run],
+        Examples: [Slink.ExampleBot]
       ]
     ]
   end

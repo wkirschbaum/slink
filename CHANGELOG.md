@@ -4,6 +4,78 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-07-17
+
+The whole remaining roadmap in one release: installing into many workspaces,
+Socket Mode that survives a dropped connection, a public testing story,
+one-call file uploads, Web API pagination, Block Kit builders, and AI-app
+support (assistant threads + streamed replies).
+
+### Added
+
+- **AI-app (assistant) support.** `:assistant_thread_started` /
+  `:assistant_thread_context_changed` normalise like any other event (channel,
+  user and thread resolve from `assistant_thread`). Handlers get
+  `set_status/2` ("is thinking…") and **`stream_reply/3`** — feed it any
+  enumerable of text chunks (an LLM token stream) and it renders as one live,
+  progressively-updating message via `chat.startStream` / `appendStream` /
+  `stopStream`, batched under Slack's limits, degrading to a single
+  `chat.postMessage` when the surface can't stream. `Slink.API` gains
+  `set_thread_status/4`, `set_thread_title/4`, `set_suggested_prompts/5`,
+  `start_stream/4`, `append_stream/4`, `stop_stream/4`.
+- **`Slink.BlockKit`** — plain builder functions for Block Kit maps (no DSL,
+  no macros): `section`, `header`, `divider`, `context`, `image`, `actions`,
+  `input`, `button`, `static_select`, `option`, `plain_text_input`,
+  `mrkdwn`/`plain_text`, and `modal` for `open_modal/2`. They return exactly
+  the maps Slack expects, so they mix freely with hand-written ones.
+
+- **OAuth install flow.** `Slink.OAuth.authorize_url/1` builds the "Add to
+  Slack" consent URL; `Slink.OAuth.exchange/2` (over the new
+  `Slink.API.oauth_access/4`) turns the redirect's code into a normalised
+  `Slink.OAuth.Install` — team id/name, bot token (redacted from inspects),
+  bot user id, enterprise id, with Slack's full response in `raw`. Mount
+  `Slink.OAuth.Plug` at the app's Redirect URL and hand the install to your
+  own store via its `:install` callback; it handles the cancelled-consent
+  redirect, an optional `:verify_state` CSRF check, a `:redirect_to` success
+  redirect, and contains callback crashes without leaking tokens into logs.
+  Persistence stays yours, as promised by the roadmap.
+- **Socket Mode high availability.** `{Slink.SocketMode, connections: 2, ...}`
+  holds N WebSocket connections open under one supervisor (Slack recommends
+  2+ in production, allows up to 10), so a dropped socket doesn't lose events
+  while it reconnects. Fleet child specs are typed `type: :supervisor`.
+  Default stays `1` — exactly the previous behaviour.
+- **`Slink.Testing`** — unit-test handlers without Slack. `event/2` builds
+  realistic fixtures for mentions, messages, reactions, slash commands,
+  block actions, modal submits, shortcuts, App Home and assistant threads
+  (assembled through the production Socket Mode normaliser, so shapes can't
+  drift); `run/3` executes a handler with every Web API call and
+  `response_url` post captured into a `Slink.Testing.Run` — synchronously and
+  offline. Failure paths are scriptable via `:api`. Requires `async: false`
+  (it swaps Slink's process-global test seams).
+- **`Slink.API.upload_file/3`** — one call for Slack's external upload flow
+  (`files.getUploadURLExternal` → upload the bytes →
+  `files.completeUploadExternal`), with `:channel`, `:initial_comment`,
+  `:thread_ts`, `:title`, `:alt_text` and `:snippet_type` options.
+- **`Slink.API.stream/3`** — lazily stream every page of a cursor-paginated
+  method, following `response_metadata.next_cursor` with `limit: 200` by
+  default and 429s waited out. Raises `Slink.API.Error` on a failed page (a
+  lazy stream can't return an error tuple).
+
+### Fixed
+
+- **Slash commands and interactions now dedup on their Socket Mode
+  `envelope_id`** (they carry no `event_id`, so previously a redelivered
+  envelope — after a dropped ACK on one socket, or across a fleet's
+  connections — ran the handler twice). `view_submission` deliberately stays
+  un-deduped: its synchronous ack must answer every delivery.
+
+### Documentation
+
+- New hexdocs guide, **Composing helpers**: the return-shape conventions, how
+  to chain actions with `with` (short-circuiting on the first
+  `{:error, reason}`), and why the helpers compose with `with` rather than
+  pipes.
+
 ## [0.6.0] - 2026-07-17
 
 Quality-of-life helpers for the most common bot patterns: DMs, ephemeral
@@ -367,6 +439,10 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
+[0.8.0]: https://github.com/wkirschbaum/slink/compare/v0.6.0...v0.8.0
+[0.6.0]: https://github.com/wkirschbaum/slink/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/wkirschbaum/slink/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/wkirschbaum/slink/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/wkirschbaum/slink/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/wkirschbaum/slink/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/wkirschbaum/slink/compare/v0.3.0...v0.3.1

@@ -77,6 +77,48 @@ defmodule Slink.DedupTest do
     refute_receive {:handled, "message", ^event_id}, 100
   end
 
+  test "a redelivered slash-command envelope (same envelope_id) dispatches only once" do
+    # Slash/interactive envelopes carry no event_id, but a Socket Mode
+    # redelivery — e.g. the same envelope re-sent on another connection of a
+    # `connections: 2` fleet after a dropped ACK — reuses the envelope_id, so
+    # that's the dedup key. Without it the command's side effect would run twice.
+    Process.register(self(), :dedup_sink)
+    envelope_id = "env-#{System.unique_integer([:positive])}"
+
+    event =
+      Event.from_socket_mode(%{
+        "type" => "slash_commands",
+        "envelope_id" => envelope_id,
+        "payload" => %{"command" => "/deploy", "text" => "prod", "channel_id" => "C1"}
+      })
+
+    context = %Context{transport: :socket_mode, bot_token: nil}
+
+    Dispatcher.async(OnceBot, event, context)
+    Dispatcher.async(OnceBot, event, context)
+
+    assert_receive {:handled, :slash_commands, nil}, 1_000
+    refute_receive {:handled, :slash_commands, nil}, 100
+  end
+
+  test "distinct envelopes are not swallowed by envelope dedup" do
+    Process.register(self(), :dedup_sink)
+
+    for _ <- 1..2 do
+      event =
+        Event.from_socket_mode(%{
+          "type" => "slash_commands",
+          "envelope_id" => "env-#{System.unique_integer([:positive])}",
+          "payload" => %{"command" => "/deploy", "channel_id" => "C1"}
+        })
+
+      Dispatcher.async(OnceBot, event, %Context{transport: :socket_mode, bot_token: nil})
+    end
+
+    assert_receive {:handled, :slash_commands, nil}, 1_000
+    assert_receive {:handled, :slash_commands, nil}, 1_000
+  end
+
   defmodule OtherBot do
     use Slink
 

@@ -89,7 +89,7 @@ defmodule Slink.Dispatcher do
   # isolates a crashing handler.
   def dispatch(module, %Event{} = event, %Slink.Context{} = context) do
     context = %{context | event: event}
-    invoke(module, event, context) |> reply(context)
+    invoke(module, event, context) |> perform_reply(context)
   end
 
   # Like dispatch/3 but returns the handler's `{:ack, map}` payload (else `%{}`)
@@ -135,21 +135,43 @@ defmodule Slink.Dispatcher do
     end
   end
 
-  # Keyed on {module, event_id}, not the id alone: the same workspace event
-  # delivered to two different Slack apps in one VM carries the same event_id,
+  # Keyed on {module, <delivery key>}, not the key alone: the same workspace
+  # event delivered to two different Slack apps in one VM carries the same id,
   # and one bot's delivery must not swallow the other's.
   defp duplicate?(module, %Event{} = event) do
-    case Event.event_id(event) do
-      id when is_binary(id) -> Slink.Dedup.seen?({module, id})
-      _ -> false
+    case dedup_key(event) do
+      nil -> false
+      key -> Slink.Dedup.seen?({module, key})
+    end
+  end
+
+  # Event callbacks dedup on Slack's event_id — stable across retries on either
+  # transport, and authoritative (one absent means malformed; don't dedup).
+  # Socket Mode slash-command/interactive envelopes carry no event_id, but a
+  # redelivery (e.g. the same envelope re-sent on another connection of a fleet
+  # after a dropped ACK) reuses the envelope_id, so those dedup on that.
+  # Envelope ids are unique per delivery, so this can never swallow a distinct
+  # event. (`view_submission` never reaches here — its sync-ack path must
+  # answer every delivery, or the modal would hang.)
+  defp dedup_key(%Event{} = event) do
+    cond do
+      is_binary(Event.event_id(event)) ->
+        {:event, Event.event_id(event)}
+
+      event.kind in [:slash_commands, :interactive] and is_binary(event.envelope_id) ->
+        {:envelope, event.envelope_id}
+
+      true ->
+        nil
     end
   end
 
   defp ack_timeout, do: Application.get_env(:slink, :ack_timeout_ms, @default_ack_timeout_ms)
 
   # Perform a reply if the handler asked for one via its return value; otherwise
-  # do nothing. See `t:Slink.result/0`.
-  defp reply({:reply, text}, context), do: Slink.reply(context, text)
-  defp reply({:reply, text, opts}, context), do: Slink.reply(context, text, opts)
-  defp reply(_other, _context), do: :ok
+  # do nothing. See `t:Slink.result/0`. Public (in this private module) so
+  # `Slink.Testing.run/3` performs return-value replies the same way.
+  def perform_reply({:reply, text}, context), do: Slink.reply(context, text)
+  def perform_reply({:reply, text, opts}, context), do: Slink.reply(context, text, opts)
+  def perform_reply(_other, _context), do: :ok
 end

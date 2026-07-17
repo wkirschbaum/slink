@@ -37,6 +37,10 @@ defmodule Slink do
         reply(context, Event.command(event), to: :channel)
       end
 
+  Handlers that do several things chain the helpers with `with` — the return
+  shapes are consistent, so the first `{:error, reason}` short-circuits. See
+  the [Composing helpers](composing.html) guide.
+
   ## Running it (Socket Mode)
 
       children = [
@@ -59,10 +63,13 @@ defmodule Slink do
   the event's team id (see `Slink.EventsApi.Plug`). So one bot module can serve
   many workspaces.
 
-  What Slink deliberately leaves to you is the **OAuth install flow** —
-  `oauth.v2.access` and persisting a token per team as workspaces install your
-  app. Bring your own token store; Slink routes to whatever token you hand it.
+  To *acquire* those tokens as workspaces install your app, use the **OAuth
+  install flow** in `Slink.OAuth` — the consent URL, code exchange, and a
+  callback plug are done for you. Persisting a token per team is deliberately
+  yours: bring your own store; Slink routes to whatever token you hand it.
   """
+
+  require Logger
 
   @typedoc "Context passed to `c:handle_event/2`. See `Slink.Context`."
   @type context :: Slink.Context.t()
@@ -409,6 +416,183 @@ defmodule Slink do
 
   def update_original(%Slink.Context{event: nil}, _text, _opts), do: {:error, :no_response_url}
 
+  @stream_flush_ms 400
+  # Flush well before Slack's per-append cap so buffers stay small.
+  @stream_flush_bytes 4_000
+  # Slack rejects markdown_text over 12k characters — never send more per call.
+  @stream_append_max 12_000
+
+  @doc """
+  Stream a reply into the event's thread, chunk by chunk (imported by
+  `use Slink`).
+
+  Built for AI apps: pass any enumerable of text chunks — an LLM token stream,
+  a `Stream`, a list — and it renders as one live, progressively-updating
+  Slack message via `chat.startStream` / `appendStream` / `stopStream`:
+
+      def handle_event(%Slink.Event{type: :message} = event, context) do
+        set_status(context, "is thinking…")
+        stream_reply(context, MyLLM.stream(Slink.Event.text(event)))
+      end
+
+  Chunks are buffered and appended at most every `:flush_ms` (default
+  #{@stream_flush_ms}ms), so a fast token stream doesn't hammer Slack's limits.
+  Streamed messages are always thread replies: the event's thread, or a new
+  one on the triggering message (like `reply/3` with `to: :thread`). If the
+  surface can't stream (the method errors — e.g. the feature isn't enabled for
+  the app), it **degrades to a single `chat.postMessage`** with the full text,
+  so the reply still arrives.
+
+  Returns `{:ok, ts}` of the streamed (or fallback) message, or
+  `{:error, reason}` when both paths failed. The enumerable is fully consumed
+  either way. Raises `ArgumentError` for an event with no channel or nothing
+  to thread under (a global shortcut, a modal submit). A `chat.stopStream`
+  failure after a successful stream still returns `{:ok, ts}` — the message
+  exists with everything appended — and logs what the failed stop was
+  carrying (a `:finish` payload, trailing text).
+
+  Options:
+
+    * `:flush_ms` — minimum interval between appends (default #{@stream_flush_ms}).
+    * `:start` — extra `chat.startStream` params; streaming into a *channel*
+      (not the app's DM) requires `%{recipient_user_id: ..., recipient_team_id: ...}`.
+    * `:finish` — extra `chat.stopStream` params (e.g. `%{blocks: [...]}` —
+      blocks are allowed only on the final call).
+  """
+  def stream_reply(context, enumerable, opts \\ [])
+
+  def stream_reply(
+        %Slink.Context{bot_token: token, event: %Slink.Event{} = event},
+        enumerable,
+        opts
+      ) do
+    channel = Slink.Event.channel(event)
+    thread_ts = Slink.Event.reply_thread(event)
+
+    if is_binary(channel) and is_binary(thread_ts) do
+      do_stream(token, channel, thread_ts, enumerable, opts)
+    else
+      raise ArgumentError,
+            "stream_reply/3 needs a channel and a message to thread under; " <>
+              "a #{inspect(event.type)} event has neither"
+    end
+  end
+
+  defp do_stream(token, channel, thread_ts, enumerable, opts) do
+    case Slink.API.start_stream(token, channel, thread_ts, Map.new(opts[:start] || %{})) do
+      {:ok, %{"ts" => ts}} ->
+        rest =
+          stream_chunks(
+            token,
+            channel,
+            ts,
+            enumerable,
+            Keyword.get(opts, :flush_ms, @stream_flush_ms)
+          )
+
+        finish_stream(token, channel, ts, rest, Map.new(opts[:finish] || %{}))
+
+      {:error, _reason} ->
+        # No streaming on this surface — degrade to one plain post.
+        text = Enum.join(enumerable)
+
+        case Slink.API.post_message(token, channel, text, %{thread_ts: thread_ts}) do
+          {:ok, %{"ts" => ts}} -> {:ok, ts}
+          {:ok, _body} -> {:ok, nil}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  # Accumulate chunks, appending a batch whenever the flush interval has passed
+  # (or the buffer nears the cap). A failed append keeps its text buffered —
+  # worst case everything lands in the final stop_stream.
+  defp stream_chunks(token, channel, ts, enumerable, flush_ms) do
+    {buffer, _last} =
+      Enum.reduce(enumerable, {"", System.monotonic_time(:millisecond)}, fn chunk,
+                                                                            {buffer, last} ->
+        buffer = buffer <> to_string(chunk)
+        now = System.monotonic_time(:millisecond)
+
+        if buffer != "" and (now - last >= flush_ms or byte_size(buffer) >= @stream_flush_bytes) do
+          {append_slices(token, channel, ts, buffer), now}
+        else
+          {buffer, last}
+        end
+      end)
+
+    buffer
+  end
+
+  # Append `buffer` in ≤@stream_append_max-char slices — one huge chunk (or a
+  # buffer grown past the cap by failed appends) must never produce an
+  # over-cap call, which Slack would reject wholesale. Returns whatever could
+  # not be delivered.
+  defp append_slices(_token, _channel, _ts, ""), do: ""
+
+  defp append_slices(token, channel, ts, buffer) do
+    {slice, rest} = String.split_at(buffer, @stream_append_max)
+
+    case Slink.API.append_stream(token, channel, ts, slice) do
+      {:ok, _body} -> append_slices(token, channel, ts, rest)
+      {:error, _reason} -> slice <> rest
+    end
+  end
+
+  # Small leftovers ride the stop call (prepended to any user-supplied final
+  # markdown_text, never clobbering it); an oversized remainder is drained
+  # through capped appends first.
+  defp finish_stream(token, channel, ts, rest, finish) do
+    rest =
+      if String.length(rest) > @stream_append_max do
+        append_slices(token, channel, ts, rest)
+      else
+        rest
+      end
+
+    finish =
+      if rest == "" do
+        finish
+      else
+        Map.update(finish, :markdown_text, rest, &(rest <> &1))
+      end
+
+    case Slink.API.stop_stream(token, channel, ts, finish) do
+      {:ok, _body} ->
+        {:ok, ts}
+
+      {:error, reason} ->
+        # The message exists and holds everything appended so far — report
+        # success, but say plainly if the failed stop was carrying text.
+        dropped =
+          if finish[:markdown_text], do: " — its trailing markdown_text was not delivered"
+
+        Logger.warning("Slink: chat.stopStream failed (#{inspect(reason)})#{dropped}")
+        {:ok, ts}
+    end
+  end
+
+  @doc """
+  Show a status line under the assistant thread of the event in `context` —
+  "is thinking…" while the real answer is prepared (imported by `use Slink`).
+
+  Wraps `Slink.API.set_thread_status/4` with the event's channel and thread.
+  Pass `""` to clear; posting or streaming a reply into the thread clears it
+  automatically. Returns `:ok | {:error, reason}`. Needs the `assistant:write`
+  scope.
+  """
+  def set_status(%Slink.Context{bot_token: token, event: %Slink.Event{} = event}, status) do
+    case Slink.API.set_thread_status(
+           token,
+           Slink.Event.channel(event),
+           Slink.Event.reply_thread(event),
+           status
+         ) do
+      {:ok, _body} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @working_emoji "hourglass_flowing_sand"
   @working_delay_ms to_timeout(second: 3)
 
@@ -495,6 +679,9 @@ defmodule Slink do
           send_dm: 4,
           reply: 2,
           reply: 3,
+          stream_reply: 2,
+          stream_reply: 3,
+          set_status: 2,
           update_original: 2,
           update_original: 3,
           working: 2,

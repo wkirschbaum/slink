@@ -34,11 +34,21 @@ defmodule Slink.Rate do
 
   @doc "Queue any Web API `method` targeting `channel`, rate-limited per channel."
   def enqueue(bot_token, channel, method, params) do
-    case worker(channel) do
-      {:ok, pid} -> GenServer.cast(pid, {:enqueue, {bot_token, method, params}})
-      :error -> :ok
+    if Application.get_env(:slink, :rate_mode, :async) == :sync do
+      # Test seam (set by Slink.Testing.run/3): perform the send inline in the
+      # caller so a test sees every send the moment the handler returns —
+      # deterministically, with no worker processes involved. Never production.
+      _ = sender().(bot_token, method, params)
+      :ok
+    else
+      case worker(channel) do
+        {:ok, pid} -> GenServer.cast(pid, {:enqueue, {bot_token, method, params}})
+        :error -> :ok
+      end
     end
   end
+
+  defp sender, do: Application.get_env(:slink, :rate_sender, &Slink.API.call/3)
 
   defp worker(channel) do
     case Registry.lookup(Slink.Rate.Registry, channel) do

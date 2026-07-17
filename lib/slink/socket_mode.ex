@@ -22,6 +22,16 @@ defmodule Slink.SocketMode do
     * `:bot_token` — bot token (`xoxb-…`) passed to handlers for Web API calls.
     * `:name` — process name (defaults to `Slink.SocketMode`; pass `nil` to run
       unregistered, e.g. to run several clients at once).
+    * `:connections` — how many parallel WebSocket connections to hold open
+      (default `1`). Slack recommends **2+** in production so that when one
+      drops (or Slack rolls its own reconnects) another is already live and no
+      events are missed; deliveries are load-balanced across them. A delivery
+      duplicated across sockets dispatches once: event callbacks dedup on
+      Slack's `event_id`, slash commands and interactions on their
+      `envelope_id` (`view_submission` is the exception — its synchronous ack
+      must answer every delivery). With `connections: 2` the given `:name`
+      belongs to the supervisor of the two clients. Slack allows at most 10
+      open connections per app.
     * `:join` — a list of channel IDs to `conversations.join` once connected
       (requires the `channels:join` scope). Defaults to `[]`.
     * `:open_connection` — a 0-arity function returning `{:ok, ws_url}` used to
@@ -61,10 +71,48 @@ defmodule Slink.SocketMode do
   @default_idle_timeout to_timeout(minute: 2)
 
   def start_link(opts) do
+    case Keyword.get(opts, :connections, 1) do
+      1 ->
+        start_client(opts)
+
+      n when is_integer(n) and n > 1 ->
+        start_fleet(opts, n)
+
+      other ->
+        raise ArgumentError,
+              "connections: must be a positive integer (Slack allows up to 10), " <>
+                "got: #{inspect(other)}"
+    end
+  end
+
+  defp start_client(opts) do
     case Keyword.get(opts, :name, __MODULE__) do
       nil -> GenServer.start_link(__MODULE__, opts)
       name -> GenServer.start_link(__MODULE__, opts, name: name)
     end
+  end
+
+  # `connections: N` runs N independent clients under one supervisor. Each
+  # dials its own WebSocket; Slack load-balances deliveries across them, so a
+  # dropped socket doesn't lose events while it reconnects. The clients run
+  # unregistered — the user's `:name` goes to the supervisor, which is the only
+  # process anyone needs to address. Duplicate deliveries during Slack's
+  # rebalancing are dropped by the shared dedup (see `Slink.Dedup`).
+  defp start_fleet(opts, n) do
+    client_opts = opts |> Keyword.delete(:connections) |> Keyword.put(:name, nil)
+
+    children =
+      for i <- 1..n do
+        Supervisor.child_spec({__MODULE__, client_opts}, id: {__MODULE__, i})
+      end
+
+    sup_opts =
+      case Keyword.get(opts, :name, __MODULE__) do
+        nil -> [strategy: :one_for_one]
+        name -> [strategy: :one_for_one, name: name]
+      end
+
+    Supervisor.start_link(children, sup_opts)
   end
 
   # Key the child id off `:name` so running one client per workspace under a
@@ -72,11 +120,18 @@ defmodule Slink.SocketMode do
   # a distinct `:name` (see *Multiple workspaces*) and their ids differ too.
   # `name: nil` (unregistered) gets a unique id per spec, so several unnamed
   # clients under one supervisor don't collide on `id: nil` either.
+  # A fleet (`connections: N`) starts a Supervisor, so the spec must say so —
+  # supervisors get `shutdown: :infinity` so their children drain properly.
   def child_spec(opts) do
-    %{
+    spec = %{
       id: Keyword.get(opts, :name, __MODULE__) || {__MODULE__, make_ref()},
       start: {__MODULE__, :start_link, [opts]}
     }
+
+    case Keyword.get(opts, :connections, 1) do
+      n when is_integer(n) and n > 1 -> Map.merge(spec, %{type: :supervisor, shutdown: :infinity})
+      _ -> spec
+    end
   end
 
   @impl true

@@ -35,7 +35,7 @@ existing options each leave a gap:
 ```elixir
 def deps do
   [
-    {:slink, "~> 0.5"}
+    {:slink, "~> 0.8"}
   ]
 end
 ```
@@ -218,17 +218,79 @@ You have room to choose *how* to respond:
   `response_url` as the event and `to:` demand), `update_original/3`,
   `send_message/4`, `send_dm/4`, `open_modal/2`, `working/3`, `mentions_me?/1`.
 - **Call the Web API directly** — `Slink.API` (`post_ephemeral/5`,
-  `update_message/5`, `schedule_message/5`, `open_dm/2`, `history/3`, `views.*`,
-  `respond/2`, …) for anything the helpers don't cover.
+  `update_message/5`, `schedule_message/5`, `open_dm/2`, `upload_file/3`,
+  `stream/3` for cursor pagination, `views.*`, `respond/2`, …) for anything
+  the helpers don't cover.
 
 The handler context also carries the bot's own identity: `context.bot_user_id`
 (discovered via `auth.test`, cached) powers `mentions_me?/1` — "was I mentioned
 in this thread message?" — without an `:app_mention` event.
 
+The helpers are built to combine with `with` — consistent `:ok` /
+`{:error, reason}` shapes, so a chain of actions short-circuits on the first
+failure. See the [Composing helpers](guides/composing.md) guide.
+
 Over the Events API, point the app's **Interactivity** and **Slash Commands**
 Request URLs at the same endpoint as events; Slink decodes all three. Slack
 retries deliveries it doesn't see ACKed — Slink drops the duplicates
 (`Slink.Dedup`) so your handler fires once.
+
+Block maps getting verbose? `Slink.BlockKit` has plain builder functions —
+no DSL, they just return the maps:
+
+```elixir
+import Slink.BlockKit
+
+reply(context, "Ready to deploy?",
+  blocks: [
+    section("*prod* is 3 commits behind — ship it?"),
+    actions([button("Deploy", action_id: "deploy", value: "prod", style: "primary")])
+  ])
+```
+
+## AI apps — assistant threads & streamed replies
+
+Slink covers Slack's AI-app surface: the `:assistant_thread_started` /
+`:assistant_thread_context_changed` events normalise like any other, and
+handlers get `set_status/2` ("is thinking…") plus `stream_reply/3`, which
+renders any enumerable of text chunks — an LLM token stream — as one live,
+progressively-updating message:
+
+```elixir
+def handle_event(%Event{type: :message} = event, context) do
+  set_status(context, "is thinking…")
+  stream_reply(context, MyLLM.stream(Event.text(event)))
+end
+```
+
+Chunks are batched under Slack's rate limits, and if the surface can't stream,
+the reply degrades to a single message — it always arrives. Suggested prompts
+and thread titles are on `Slink.API` (`set_suggested_prompts/5`,
+`set_thread_title/4`). Requires the `assistant:write` scope and the Agents
+toggle in the app config.
+
+## Testing your bot
+
+`Slink.Testing` makes handlers unit-testable without Slack: build a realistic
+event fixture, run the handler, and assert on what it sent — synchronously,
+nothing touches the network:
+
+```elixir
+defmodule MyBotTest do
+  use ExUnit.Case, async: false
+  import Slink.Testing
+
+  test "greets a mention in its thread" do
+    run = run(MyBot, event(:app_mention, text: "<@U1BOT> hi", thread_ts: "1.0"))
+
+    assert [{"chat.postMessage", %{text: "hi" <> _, thread_ts: "1.0"}}] = run.calls
+  end
+end
+```
+
+Fixtures exist for mentions, messages, reactions, slash commands, button
+clicks, modal submits and more — see `Slink.Testing.event/2`. Failure paths are
+scriptable via the `:api` option.
 
 ## Going to production — Events API (HTTP)
 
@@ -264,6 +326,35 @@ public URL as the **Request URL** under **Event Subscriptions**
 `url_verification` handshake and verifies every request's signature automatically.
 
 The same `MyBot` works unchanged across both transports.
+
+Staying on Socket Mode in production instead? Hold two connections open so a
+drop never loses events — Slack load-balances across them and Slink dedups:
+
+```elixir
+{Slink.SocketMode, module: MyBot, connections: 2, app_token: ..., bot_token: ...}
+```
+
+## Serving many workspaces — the OAuth install flow
+
+Both transports already route a per-workspace token (see *Multiple workspaces*
+in the module docs). To *acquire* those tokens as workspaces install your app,
+send installers to `Slink.OAuth.authorize_url/1` and mount `Slink.OAuth.Plug`
+at the app's Redirect URL — it exchanges the returned code and hands the result
+to your store:
+
+```elixir
+forward "/slack/oauth/callback", to: Slink.OAuth.Plug,
+  init_opts: [
+    client_id: "1234.5678",
+    client_secret: fn -> System.fetch_env!("SLACK_CLIENT_SECRET") end,
+    install: fn install -> MyApp.Installs.put(install.team_id, install.bot_token) end
+  ]
+```
+
+Persistence stays yours: store `{team_id, bot_token}` however you like, and
+hand it back per request via the `:bot_token` resolver. The `:install`
+callback must return `:ok` — anything else (or a raise) answers the installer
+with a 500 rather than claiming success.
 
 ## Transport choice, per Slack's own guidance
 

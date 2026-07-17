@@ -58,6 +58,16 @@ defmodule Slink.SocketModeTest do
     assert Slink.SocketMode.child_spec(module: Bot).id == Slink.SocketMode
   end
 
+  test "child_spec for a fleet is typed as a supervisor" do
+    spec = Slink.SocketMode.child_spec(module: Bot, connections: 2)
+    assert spec.type == :supervisor
+    assert spec.shutdown == :infinity
+
+    # A single client stays a plain worker spec (defaults).
+    single = Slink.SocketMode.child_spec(module: Bot)
+    refute Map.has_key?(single, :type)
+  end
+
   test "child_spec with name: nil gets a unique id, so several unregistered clients coexist" do
     a = Slink.SocketMode.child_spec(module: Bot, name: nil)
     b = Slink.SocketMode.child_spec(module: Bot, name: nil)
@@ -102,6 +112,42 @@ defmodule Slink.SocketModeTest do
          opts
        )}
     )
+  end
+
+  test "connections: 2 holds two sockets open and dispatches a duplicated delivery once" do
+    # Both connections receive the same envelope (same event_id), as they can
+    # during Slack's rebalancing — the shared dedup must fire the handler once.
+    event_id = "EVT-#{System.unique_integer([:positive])}"
+
+    frames = [
+      {:text, JSON.encode!(%{"type" => "hello"})},
+      {:text,
+       JSON.encode!(%{
+         "type" => "events_api",
+         "envelope_id" => "env-ha",
+         "payload" => %{
+           "type" => "event_callback",
+           "event_id" => event_id,
+           "event" => %{"type" => "app_mention", "channel" => "C-ha", "user" => "U1"}
+         }
+       })}
+    ]
+
+    {:ok, url, server} = FakeSlack.start(self(), frames: frames)
+    on_exit(fn -> Process.exit(server, :normal) end)
+
+    start_client(url, connections: 2)
+
+    assert_receive {:fake_slack, :connected}, 15_000
+    assert_receive {:fake_slack, :connected}, 15_000
+
+    # Every connection ACKs its own delivery (ACK happens before dedup)...
+    assert_receive {:fake_slack, :frame, _ack1}, 15_000
+    assert_receive {:fake_slack, :frame, _ack2}, 15_000
+
+    # ...but the handler fires exactly once.
+    assert_receive {:bot_event, %Slink.Event{payload: %{"channel" => "C-ha"}}, _ctx}, 15_000
+    refute_receive {:bot_event, _, _}, 500
   end
 
   test "full round trip: connect, receive hello + event, dispatch, and ACK" do
