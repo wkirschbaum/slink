@@ -4,12 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0] - 2026-07-17
+## [0.6.0] - 2026-07-17
 
-The whole remaining roadmap in one release: installing into many workspaces,
-Socket Mode that survives a dropped connection, a public testing story,
-one-call file uploads, Web API pagination, Block Kit builders, and AI-app
-support (assistant threads + streamed replies).
+The whole roadmap in one release: quality-of-life helpers (DMs, ephemeral
+replies, updating a clicked message, bot self-identity), installing into many
+workspaces, Socket Mode that survives a dropped connection, a public testing
+story, one-call file uploads, Web API pagination, Block Kit builders, and
+AI-app support (assistant threads + streamed replies).
 
 ### Added
 
@@ -93,12 +94,7 @@ support (assistant threads + streamed replies).
   `{:error, reason}`), and why the helpers compose with `with` rather than
   pipes.
 
-## [0.6.0] - 2026-07-17
-
-Quality-of-life helpers for the most common bot patterns: DMs, ephemeral
-replies, updating a clicked message, and knowing who the bot is.
-
-### Added
+### Added (quality-of-life helpers)
 
 - **`send_dm/4`** (imported by `use Slink`) — DM a user in one call:
   `conversations.open` + a rate-limited post. Also `Slink.API.open_dm/2`.
@@ -121,12 +117,6 @@ replies, updating a clicked message, and knowing who the bot is.
 - **New `Slink.API` wrappers**: `schedule_message/5` (chat.scheduleMessage),
   `join_channel/2` (conversations.join), `history/3` (conversations.history,
   single page), `auth_test/1`, `open_dm/2`.
-
-### Documentation
-
-- ROADMAP: added a public testing module, one-call file uploads, Web API
-  pagination streams, Block Kit builder functions, and AI-assistant app
-  support (assistant events, status, streamed replies).
 
 ## [0.5.1] - 2026-07-17
 
@@ -456,7 +446,6 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
-[0.8.0]: https://github.com/wkirschbaum/slink/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/wkirschbaum/slink/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/wkirschbaum/slink/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/wkirschbaum/slink/compare/v0.4.0...v0.5.0

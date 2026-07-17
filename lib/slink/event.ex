@@ -128,7 +128,8 @@ defmodule Slink.Event do
 
   Interactions nest the user as a map (`user.id`) and slash commands carry a
   flat `user_id`; both are surfaced here as the plain user id, like message
-  events.
+  events. For `message_changed` / `message_deleted` subtypes this is the
+  nested message's author.
   """
   def user(%__MODULE__{kind: :interactive, payload: payload}), do: dig(payload, ["user", "id"])
   def user(%__MODULE__{kind: :slash_commands, payload: payload}), do: payload["user_id"]
@@ -228,7 +229,8 @@ defmodule Slink.Event do
 
   This is Slack's `thread_ts` — the `ts` of the thread's root message. For
   `block_actions` interactions it's read from the message the component is on, so
-  a click in a thread threads and a click on a top-level message does not.
+  a click in a thread threads and a click on a top-level message does not. For
+  `message_changed` / `message_deleted` subtypes it's the nested message's.
   """
   def thread_ts(%__MODULE__{kind: :interactive, payload: payload}),
     do: dig(payload, ["message", "thread_ts"]) || dig(payload, ["container", "thread_ts"])

@@ -74,7 +74,10 @@ defmodule Slink.Testing do
   Supported types and their specific attributes:
 
     * `:app_mention`, `:message` — `:text`, `:thread_ts`, `:subtype`,
-      `:event_id`
+      `:event_id`. A `"message_changed"` / `"message_deleted"` subtype builds
+      the nested shape Slack really sends (your attrs describe the nested
+      message; the wrapper gets its own edit-event `ts`), so the accessors
+      behave as they do in production.
     * `:reaction_added` / `:reaction_removed` — `:emoji` (default `"eyes"`)
     * `:app_home_opened` — `:user`
     * `:slash_command` (or `:slash_commands`) — `:command` (default
@@ -99,9 +102,8 @@ defmodule Slink.Testing do
         "text" => attrs[:text] || ""
       }
       |> put_present("thread_ts", attrs[:thread_ts])
-      |> put_present("subtype", attrs[:subtype])
 
-    event_callback(inner, attrs)
+    event_callback(nest_subtype(inner, attrs[:subtype]), attrs)
   end
 
   def event(type, attrs) when type in [:reaction_added, :reaction_removed] do
@@ -223,6 +225,36 @@ defmodule Slink.Testing do
 
     envelope("interactive", payload)
   end
+
+  # message_changed / message_deleted nest the real message, exactly as Slack
+  # sends them — so a fixture like `event(:message, subtype: "message_changed",
+  # text: "edited")` behaves under the accessors the way production payloads
+  # do. Other subtypes (bot_message, …) are flat on the wire and stay flat.
+  defp nest_subtype(inner, nil), do: inner
+
+  defp nest_subtype(inner, "message_changed") do
+    %{
+      "type" => "message",
+      "subtype" => "message_changed",
+      "channel" => inner["channel"],
+      # The wrapper's own ts is the edit event's timestamp, not the message's.
+      "ts" => "9999999999.000001",
+      "message" => Map.drop(inner, ["channel"])
+    }
+  end
+
+  defp nest_subtype(inner, "message_deleted") do
+    %{
+      "type" => "message",
+      "subtype" => "message_deleted",
+      "channel" => inner["channel"],
+      "ts" => "9999999999.000001",
+      "deleted_ts" => inner["ts"],
+      "previous_message" => Map.drop(inner, ["channel"])
+    }
+  end
+
+  defp nest_subtype(inner, subtype), do: Map.put(inner, "subtype", subtype)
 
   defp event_callback(inner, attrs) do
     envelope("events_api", %{

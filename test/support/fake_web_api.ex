@@ -108,7 +108,9 @@ defmodule Slink.Test.FakeWebApi do
     defp json(["files.completeUploadExternal"]),
       do: %{"ok" => true, "files" => [%{"id" => "F1", "title" => "report"}]}
 
-    defp json(["auth.test"]), do: %{"ok" => true, "user_id" => "U-BOT", "team_id" => "T1"}
+    defp json(["auth.test"]),
+      do: %{"ok" => true, "user_id" => "U-BOT", "team_id" => "T1", "team" => "Acme"}
+
     defp json(["assistant.threads.setStatus"]), do: %{"ok" => true}
     defp json(["assistant.threads.setTitle"]), do: %{"ok" => true}
     defp json(["assistant.threads.setSuggestedPrompts"]), do: %{"ok" => true}

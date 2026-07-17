@@ -92,6 +92,26 @@ defmodule Slink.TestingTest do
       event = event(:message, extra: %{"bot_id" => "B1"})
       assert Event.from_bot?(event)
     end
+
+    test "a message_changed subtype builds the nested shape Slack really sends" do
+      event =
+        event(:message, subtype: "message_changed", text: "edited!", ts: "5.0", user: "U-ed")
+
+      # The accessors resolve through the nesting, as in production.
+      assert Event.text(event) == "edited!"
+      assert Event.user(event) == "U-ed"
+      assert Event.ts(event) == "5.0"
+      assert event.subtype == "message_changed"
+      assert Event.channel(event) == "C123"
+
+      deleted = event(:message, subtype: "message_deleted", extra: %{})
+      assert deleted.subtype == "message_deleted"
+      assert Event.ts(deleted) == "1700000000.000100"
+
+      # Flat subtypes stay flat, as Slack sends them.
+      bot_msg = event(:message, subtype: "bot_message", text: "beep")
+      assert Event.text(bot_msg) == "beep"
+    end
   end
 
   describe "run/3" do

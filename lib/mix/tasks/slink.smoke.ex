@@ -44,7 +44,8 @@ defmodule Mix.Tasks.Slink.Smoke do
       []
       |> required("auth.test", fn ->
         with {:ok, body} <- Slink.API.auth_test(token) do
-          {:ok, "bot #{body["user_id"]} in team #{body["team_id"]} (#{body["team"]})"}
+          team_name = if body["team"], do: " (#{body["team"]})", else: ""
+          {:ok, "bot #{body["user_id"]} in team #{body["team_id"]}#{team_name}"}
         end
       end)
       |> smoke_message(token, channel)
@@ -74,6 +75,10 @@ defmodule Mix.Tasks.Slink.Smoke do
         |> required("chat.update", fn ->
           Slink.API.update_message(token, channel, ts, "slink smoke test ✅ done")
         end)
+
+      {:ok, body} ->
+        report("chat.postMessage", {:error, {:no_ts, body}})
+        ["chat.postMessage" | failures]
 
       {:error, reason} ->
         report("chat.postMessage", {:error, reason})

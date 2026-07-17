@@ -216,9 +216,10 @@ defmodule Slink.SocketMode do
 
   # A modal-submit ACK computed off-process (see handle_message for sync_ack
   # events). Must match before the Mint transport clause below, which treats
-  # unknown messages as noise. If the connection was replaced meanwhile,
-  # send_frame is a no-op and Slack redelivers the envelope — same as an ACK
-  # lost in transit.
+  # unknown messages as noise. If the connection dropped meanwhile, send_frame
+  # is a no-op (mid-reconnect) or the stale ack goes out on the new socket and
+  # Slack discards it — either way Slack redelivers the envelope, same as an
+  # ACK lost in transit.
   def handle_info({:ack_ready, envelope_id, payload}, state) do
     {:noreply, ack(state, envelope_id, payload)}
   end

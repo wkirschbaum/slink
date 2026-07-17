@@ -35,7 +35,7 @@ existing options each leave a gap:
 ```elixir
 def deps do
   [
-    {:slink, "~> 0.8"}
+    {:slink, "~> 0.6"}
   ]
 end
 ```
