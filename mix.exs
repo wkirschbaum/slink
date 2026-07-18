@@ -79,6 +79,7 @@ defmodule Slink.MixProject do
         {"guides/ai-apps.md", [title: "AI apps"]},
         {"guides/multi-workspace.md", [title: "Serving many workspaces"]},
         {"guides/testing.md", [title: "Testing your bot"]},
+        {"guides/playground.md", [title: "Playground (local fake Slack)"]},
         {"guides/production.md", [title: "Going to production"]},
         "CHANGELOG.md",
         "ROADMAP.md",
@@ -91,7 +92,7 @@ defmodule Slink.MixProject do
         Events: [Slink.Event, Slink.Context, Slink.Dedup],
         "Block Kit": [Slink.BlockKit],
         Installation: [Slink.OAuth, Slink.OAuth.Install, Slink.OAuth.Plug],
-        Testing: [Slink.Testing, Slink.Testing.Run],
+        Testing: [Slink.Testing, Slink.Testing.Run, Slink.Playground],
         Examples: [Slink.ExampleBot]
       ]
     ]

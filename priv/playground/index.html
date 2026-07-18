@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slink Playground</title>
+<style>
+  :root {
+    --sidebar-bg: #3f0e40;
+    --sidebar-hover: #350d36;
+    --sidebar-active: #1164a3;
+    --sidebar-text: #cfc3cf;
+    --text: #1d1c1d;
+    --muted: #616061;
+    --border: #dddddd;
+    --accent: #007a5a;
+    --link: #1264a3;
+    --ephemeral-bg: #fffcf4;
+  }
+  * { box-sizing: border-box; }
+  /* The id selectors below set explicit display values, which would beat the
+     UA's [hidden] rule — restore hidden's meaning at higher specificity. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px; color: var(--text); overflow: hidden;
+  }
+  #app { display: flex; height: 100vh; flex-direction: column; }
+  #cols { display: flex; flex: 1; min-height: 0; }
+
+  /* ── Sidebar ─────────────────────────────────────────── */
+  #sidebar {
+    width: 220px; flex: none; background: var(--sidebar-bg); color: var(--sidebar-text);
+    display: flex; flex-direction: column; padding-top: 8px;
+  }
+  #sidebar .ws-name {
+    color: #fff; font-weight: 900; font-size: 17px; padding: 8px 16px 14px;
+    border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 8px;
+  }
+  #sidebar .nav-label {
+    padding: 10px 16px 4px; font-size: 13px; color: var(--sidebar-text); opacity: .8;
+  }
+  #sidebar .nav-item {
+    padding: 4px 16px; cursor: pointer; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #sidebar .nav-item:hover { background: var(--sidebar-hover); }
+  #sidebar .nav-item.active { background: var(--sidebar-active); color: #fff; }
+  #sidebar .presence { color: #2bac76; font-size: 10px; margin-right: 4px; }
+  #conn { margin-top: auto; padding: 10px 16px; font-size: 12px; opacity: .7; }
+  #conn.down { color: #ffb3b3; opacity: 1; }
+
+  /* ── Main pane ───────────────────────────────────────── */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #fff; }
+  #main-header {
+    padding: 10px 16px; border-bottom: 1px solid var(--border); font-weight: 900;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  #main-header .sub { font-weight: 400; color: var(--muted); font-size: 13px; }
+  #messages, #home-pane { flex: 1; overflow-y: auto; padding: 12px 0 24px; }
+  #home-pane { padding: 24px; }
+  #home-pane .empty { color: var(--muted); max-width: 480px; }
+  #home-pane .empty code { background: #f6f6f6; padding: 1px 4px; border-radius: 3px; }
+
+  /* ── Messages ────────────────────────────────────────── */
+  .msg { display: flex; gap: 10px; padding: 5px 16px; position: relative; }
+  .msg:hover { background: #f8f8f8; }
+  .msg .avatar {
+    width: 36px; height: 36px; border-radius: 6px; flex: none; color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 900;
+    margin-top: 2px;
+  }
+  .avatar.you { background: #7c3085; }
+  .avatar.bot { background: #007a5a; }
+  .msg .body { min-width: 0; flex: 1; }
+  .msg .meta { display: flex; align-items: baseline; gap: 8px; }
+  .msg .author { font-weight: 900; }
+  .msg .app-badge {
+    background: #e8e8e8; color: var(--muted); font-size: 10px; font-weight: 700;
+    border-radius: 3px; padding: 0 4px; vertical-align: middle;
+  }
+  .msg .ts { color: var(--muted); font-size: 12px; }
+  .msg .text { white-space: pre-wrap; overflow-wrap: break-word; }
+  .msg .text .mention, .bk .mention { background: #e8f5fa; color: var(--link); border-radius: 3px; padding: 0 2px; }
+  .msg .text code, .bk code {
+    font-family: Monaco, Menlo, Consolas, monospace; font-size: 12px;
+    background: #f6f6f6; border: 1px solid #e0e0e0; border-radius: 3px; padding: 0 3px;
+    color: #e01e5a;
+  }
+  .msg .text pre, .bk pre {
+    font-family: Monaco, Menlo, Consolas, monospace; font-size: 12px;
+    background: #f6f6f6; border: 1px solid #e0e0e0; border-radius: 4px; padding: 8px;
+    overflow-x: auto; white-space: pre-wrap;
+  }
+  .msg.ephemeral { background: var(--ephemeral-bg); }
+  .msg.ephemeral .eph-note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .msg.ephemeral .eph-note::before { content: "👻 "; }
+  .cursor { display: inline-block; width: 8px; background: var(--accent); color: transparent;
+            animation: blink 1s step-start infinite; border-radius: 1px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .edited { color: var(--muted); font-size: 11px; }
+
+  .file-chip {
+    display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; margin-top: 6px; font-size: 13px;
+  }
+  .file-chip .size { color: var(--muted); }
+
+  .reactions { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  .reaction {
+    border: 1px solid var(--border); border-radius: 12px; padding: 1px 8px; font-size: 12px;
+    background: #f8f8f8; cursor: pointer; user-select: none;
+  }
+  .reaction.mine { background: #e8f5fa; border-color: var(--sidebar-active); }
+  .reaction:hover { border-color: var(--muted); }
+
+  .msg-actions {
+    position: absolute; right: 16px; top: -12px; display: none; gap: 2px;
+    background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 2px;
+  }
+  .msg:hover .msg-actions { display: flex; }
+  .msg-actions button {
+    border: 0; background: none; cursor: pointer; font-size: 14px; padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .msg-actions button:hover { background: #f0f0f0; }
+  .picker {
+    position: absolute; right: 16px; top: 14px; z-index: 30; background: #fff;
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px; display: flex; gap: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  }
+  .picker button { border: 0; background: none; font-size: 18px; cursor: pointer; border-radius: 4px; }
+  .picker button:hover { background: #f0f0f0; }
+
+  .thread-link { color: var(--link); font-size: 13px; cursor: pointer; margin-top: 3px; display: inline-block; }
+  .thread-link:hover { text-decoration: underline; }
+
+  /* ── Composer ────────────────────────────────────────── */
+  .composer { padding: 0 16px 16px; position: relative; }
+  .composer .box { border: 1px solid #8d8d8d; border-radius: 8px; overflow: hidden; }
+  .composer textarea {
+    display: block; width: 100%; border: 0; resize: none; padding: 10px 12px; font: inherit;
+    outline: none; max-height: 140px;
+  }
+  .composer .hint { font-size: 12px; color: var(--muted); padding: 4px 2px 0; min-height: 18px; }
+  .composer .hint b { color: var(--text); }
+  .autocomplete {
+    position: absolute; bottom: 100%; left: 16px; right: 16px; background: #fff;
+    border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 -4px 12px rgba(0,0,0,.1);
+    padding: 4px; z-index: 20;
+  }
+  .autocomplete .opt { padding: 6px 10px; border-radius: 5px; cursor: pointer; }
+  .autocomplete .opt:hover, .autocomplete .opt.sel { background: var(--sidebar-active); color: #fff; }
+
+  /* ── Thread panel ────────────────────────────────────── */
+  #thread {
+    width: 340px; flex: none; border-left: 1px solid var(--border); display: flex;
+    flex-direction: column; background: #fff;
+  }
+  #thread header {
+    padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 900;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #thread header button { border: 0; background: none; font-size: 16px; cursor: pointer; color: var(--muted); }
+  #thread-msgs { flex: 1; overflow-y: auto; padding: 8px 0; }
+
+  /* ── Block Kit ───────────────────────────────────────── */
+  .bk { max-width: 620px; }
+  .bk-header { font-size: 19px; font-weight: 900; margin: 6px 0 2px; }
+  .bk-section { margin: 4px 0; display: flex; gap: 12px; align-items: flex-start; }
+  .bk-section .txt { flex: 1; white-space: pre-wrap; }
+  .bk-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; flex: 1; }
+  .bk hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
+  .bk-context { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; margin: 4px 0; }
+  .bk-context img { width: 16px; height: 16px; border-radius: 3px; }
+  .bk-img { max-width: 360px; border-radius: 8px; display: block; margin: 6px 0; }
+  .bk-img-title { font-size: 12px; color: var(--muted); }
+  .bk-actions { display: flex; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+  .bk-btn {
+    font: inherit; font-weight: 700; padding: 5px 12px; border-radius: 4px;
+    border: 1px solid #8d8d8d; background: #fff; cursor: pointer; text-decoration: none;
+    color: var(--text); display: inline-block;
+  }
+  .bk-btn:hover { background: #f6f6f6; }
+  .bk-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .bk-btn.primary:hover { background: #148567; }
+  .bk-btn.danger { background: #e01e5a; border-color: #e01e5a; color: #fff; }
+  .bk-select { font: inherit; padding: 5px 8px; border-radius: 4px; border: 1px solid #8d8d8d; background: #fff; max-width: 220px; }
+  .bk-unknown { margin: 4px 0; }
+  .bk-unknown summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+
+  /* ── Modal ───────────────────────────────────────────── */
+  #overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex;
+    align-items: flex-start; justify-content: center; padding-top: 8vh; z-index: 100;
+  }
+  .modal {
+    background: #fff; border-radius: 12px; width: 520px; max-width: 94vw; max-height: 80vh;
+    display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,.3);
+  }
+  .modal header {
+    padding: 16px 20px; font-size: 19px; font-weight: 900; display: flex;
+    justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border);
+  }
+  .modal header .x { border: 0; background: none; font-size: 20px; cursor: pointer; color: var(--muted); }
+  .modal .mbody { padding: 16px 20px; overflow-y: auto; }
+  .modal footer {
+    padding: 12px 20px; border-top: 1px solid var(--border); display: flex;
+    justify-content: flex-end; gap: 8px;
+  }
+  .modal .stack-note { font-size: 12px; color: var(--muted); margin-right: auto; align-self: center; }
+  .m-input { margin: 10px 0; }
+  .m-input label { display: block; font-weight: 700; margin-bottom: 4px; }
+  .m-input label .optional { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .m-input input[type=text], .m-input textarea, .m-input select {
+    width: 100%; font: inherit; padding: 8px 10px; border: 1px solid #8d8d8d; border-radius: 4px;
+  }
+  .m-input .hint { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .m-input .error { color: #e01e5a; font-size: 13px; margin-top: 3px; }
+  .m-input.invalid input, .m-input.invalid textarea, .m-input.invalid select { border-color: #e01e5a; }
+
+  /* ── Inspector ───────────────────────────────────────── */
+  #inspector { border-top: 1px solid var(--border); background: #fafafa; flex: none; }
+  #inspector .bar {
+    padding: 6px 16px; font-size: 13px; font-weight: 700; cursor: pointer; user-select: none;
+    color: var(--muted); display: flex; gap: 8px; align-items: center;
+  }
+  #inspector .bar:hover { color: var(--text); }
+  #inspector-list { max-height: 260px; overflow-y: auto; display: none; }
+  #inspector.open #inspector-list { display: block; }
+  .entry { border-top: 1px solid #eee; font-size: 13px; }
+  .entry .row { display: flex; gap: 10px; padding: 4px 16px; cursor: pointer; align-items: center; }
+  .entry .row:hover { background: #f0f0f0; }
+  .entry .dir { font-weight: 900; width: 14px; }
+  .entry .dir.in { color: #1264a3; }
+  .entry .dir.out { color: #007a5a; }
+  .entry .label { font-family: Monaco, Menlo, monospace; font-size: 12px; }
+  .entry .badge {
+    font-size: 10px; font-weight: 700; border-radius: 3px; padding: 0 4px;
+    background: #fff3cd; color: #8a6d3b;
+  }
+  .entry .err-badge { background: #fdd; color: #b00; }
+  .entry .spacer { flex: 1; }
+  .entry .redeliver { border: 1px solid var(--border); background: #fff; border-radius: 4px;
+    font-size: 11px; cursor: pointer; padding: 1px 6px; }
+  .entry .detail { display: none; padding: 0 16px 8px 40px; }
+  .entry.open .detail { display: block; }
+  .entry .detail h4 { margin: 6px 0 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .entry .detail pre {
+    margin: 0; font-size: 11px; background: #fff; border: 1px solid #eee; border-radius: 4px;
+    padding: 6px; overflow-x: auto; max-height: 180px; overflow-y: auto;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="cols">
+    <aside id="sidebar">
+      <div class="ws-name">Playground</div>
+      <div class="nav-label">Apps</div>
+      <div class="nav-item" id="nav-home" onclick="openHome()">🏠 slinkbot — Home</div>
+      <div class="nav-label">Channels</div>
+      <div id="nav-channels"></div>
+      <div class="nav-label">Direct messages</div>
+      <div id="nav-dms"></div>
+      <div id="conn">connecting…</div>
+    </aside>
+
+    <main id="main">
+      <header id="main-header"></header>
+      <div id="messages"></div>
+      <div id="home-pane" hidden></div>
+      <div class="composer" id="composer">
+        <div id="autocomplete" class="autocomplete" hidden></div>
+        <div class="box"><textarea id="input" rows="1" placeholder="Message"></textarea></div>
+        <div class="hint" id="composer-hint"></div>
+      </div>
+    </main>
+
+    <aside id="thread" hidden>
+      <header><span>Thread</span><button onclick="closeThread()">✕</button></header>
+      <div id="thread-msgs"></div>
+      <div class="composer" id="thread-composer">
+        <div class="box"><textarea id="thread-input" rows="1" placeholder="Reply…"></textarea></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="inspector">
+    <div class="bar" onclick="toggleInspector()"><span id="inspector-caret">▸</span> Inspector <span id="inspector-count"></span></div>
+    <div id="inspector-list"></div>
+  </div>
+</div>
+
+<div id="overlay" hidden></div>
+
+<script>
+"use strict";
+
+// ── App state ────────────────────────────────────────────
+let state = null;                       // latest workspace snapshot
+let currentChannel = "C0GENERAL";       // channel id shown in the main pane
+let onHome = false;
+let openThreadTs = null;                // root ts of the open thread
+let inspectorOpen = false;
+let expanded = new Set();               // open inspector entries
+let openPicker = null;                  // "<channel>|<ts>" with the emoji picker open
+let lastViewsJson = "";                 // modal re-render guard
+
+const EMOJI = {
+  eyes: "👀", thumbsup: "👍", "+1": "👍", heart: "❤️", tada: "🎉", wave: "👋",
+  hourglass_flowing_sand: "⏳", white_check_mark: "✅", x: "❌", rocket: "🚀",
+  fire: "🔥", sparkles: "✨", raised_hands: "🙌", pray: "🙏", joy: "😂",
+};
+const PICKER_EMOJI = ["eyes", "thumbsup", "heart", "tada", "wave", "rocket"];
+
+// ── Server feed ──────────────────────────────────────────
+const es = new EventSource("/events");
+es.addEventListener("state", (e) => { state = JSON.parse(e.data); render(); });
+es.onopen = () => setConn(true);
+es.onerror = () => setConn(false);
+
+function setConn(up) {
+  const el = document.getElementById("conn");
+  el.textContent = up ? "● connected" : "○ reconnecting…";
+  el.classList.toggle("down", !up);
+}
+
+async function post(path, body) {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return resp.json();
+}
+
+// ── Rendering ────────────────────────────────────────────
+function render() {
+  if (!state) return;
+  renderSidebar();
+  renderHeader();
+  if (onHome) renderHome(); else renderMessages();
+  renderThread();
+  renderInspector();
+  renderModal();
+}
+
+function channel(id) { return state.channels.find((c) => c.id === id); }
+function messagesIn(id) { return state.messages[id] || []; }
+
+function renderSidebar() {
+  const chans = document.getElementById("nav-channels");
+  const dms = document.getElementById("nav-dms");
+  chans.innerHTML = ""; dms.innerHTML = "";
+  for (const c of state.channels) {
+    const el = document.createElement("div");
+    el.className = "nav-item" + (!onHome && currentChannel === c.id ? " active" : "");
+    el.innerHTML = c.is_im ? `<span class="presence">●</span>${esc(c.name)}` : `# ${esc(c.name)}`;
+    el.onclick = () => { onHome = false; currentChannel = c.id; openThreadTs = null; render(); };
+    (c.is_im ? dms : chans).appendChild(el);
+  }
+  document.getElementById("nav-home").classList.toggle("active", onHome);
+}
+
+function renderHeader() {
+  const h = document.getElementById("main-header");
+  if (onHome) {
+    h.innerHTML = `🏠 slinkbot <span class="sub">App Home</span>`;
+  } else {
+    const c = channel(currentChannel);
+    h.innerHTML = c.is_im
+      ? `<span class="presence" style="color:#2bac76">●</span> ${esc(c.name)} <span class="sub">direct message</span>`
+      : `# ${esc(c.name)}`;
+  }
+  document.getElementById("messages").hidden = onHome;
+  document.getElementById("composer").style.display = onHome ? "none" : "";
+  document.getElementById("home-pane").hidden = !onHome;
+}
+
+function renderMessages() {
+  const pane = document.getElementById("messages");
+  const pinned = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+  const top = messagesIn(currentChannel).filter((m) => !m.thread_ts || m.thread_ts === m.ts);
+  pane.innerHTML = top.map((m) => renderMessage(m, { thread: false })).join("");
+  if (pinned) pane.scrollTop = pane.scrollHeight;
+}
+
+function renderMessage(m, opts) {
+  const you = m.user === state.you;
+  const name = you ? "you" : state.bot.name;
+  const badge = you ? "" : ` <span class="app-badge">APP</span>`;
+  const replies = m.reply_count
+    ? `<span class="thread-link" onclick="openThread('${m.ts}')">💬 ${m.reply_count} ${m.reply_count === 1 ? "reply" : "replies"}</span>`
+    : "";
+  const threadBtn = opts.thread || m.thread_ts
+    ? "" : `<button title="Reply in thread" onclick="openThread('${m.ts}')">💬</button>`;
+  const picker = openPicker === `${currentChannel}|${m.ts}` ? renderPicker(m) : "";
+  return `
+    <div class="msg${m.ephemeral ? " ephemeral" : ""}">
+      <div class="avatar ${you ? "you" : "bot"}">${you ? "Y" : "S"}</div>
+      <div class="body">
+        <div class="meta"><span class="author">${esc(name)}</span>${badge}<span class="ts">${fmtTs(m.ts)}</span>
+          ${m.edited ? `<span class="edited">(edited)</span>` : ""}</div>
+        <div class="text">${mrkdwn(m.text)}${m.streaming ? `<span class="cursor">▍</span>` : ""}</div>
+        ${m.blocks ? `<div class="bk">${renderBlocks(m.blocks, { channel: currentChannel, message_ts: m.ts })}</div>` : ""}
+        ${(m.files || []).map((f) => `<div class="file-chip">📄 ${esc(f.title || f.name)} <span class="size">${f.size} bytes</span></div>`).join("")}
+        ${renderReactions(m)}
+        ${m.ephemeral ? `<div class="eph-note">Only visible to you</div>` : ""}
+        ${opts.thread ? "" : replies}
+      </div>
+      <div class="msg-actions">
+        <button title="Add reaction" onclick="togglePicker('${m.ts}')">😀</button>
+        ${threadBtn}
+      </div>
+      ${picker}
+    </div>`;
+}
+
+function renderReactions(m) {
+  if (!m.reactions || !m.reactions.length) return "";
+  const pills = m.reactions.map((r) => {
+    const mine = r.users.includes(state.you);
+    return `<span class="reaction${mine ? " mine" : ""}" title=":${esc(r.name)}:"
+      onclick="toggleReaction('${m.ts}', '${esc(r.name)}', ${mine})">${emoji(r.name)} ${r.count}</span>`;
+  });
+  return `<div class="reactions">${pills.join("")}</div>`;
+}
+
+function renderPicker(m) {
+  const btns = PICKER_EMOJI.map((n) =>
+    `<button title=":${n}:" onclick="pickReaction('${m.ts}', '${n}')">${EMOJI[n]}</button>`).join("");
+  return `<div class="picker">${btns}</div>`;
+}
+
+// ── Threads ──────────────────────────────────────────────
+function openThread(ts) { openThreadTs = ts; render(); }
+function closeThread() { openThreadTs = null; render(); }
+
+function renderThread() {
+  const panel = document.getElementById("thread");
+  if (onHome || !openThreadTs) { panel.hidden = true; return; }
+  const msgs = messagesIn(currentChannel).filter(
+    (m) => m.ts === openThreadTs || m.thread_ts === openThreadTs);
+  if (!msgs.length) { panel.hidden = true; openThreadTs = null; return; }
+  panel.hidden = false;
+  const pane = document.getElementById("thread-msgs");
+  const pinned = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+  pane.innerHTML = msgs.map((m) => renderMessage(m, { thread: true })).join("");
+  if (pinned) pane.scrollTop = pane.scrollHeight;
+}
+
+// ── Home tab ─────────────────────────────────────────────
+function openHome() {
+  onHome = true; openThreadTs = null;
+  post("/ui/home_opened", {});
+  render();
+}
+
+function renderHome() {
+  const pane = document.getElementById("home-pane");
+  const home = state.views.home;
+  if (!home) {
+    pane.innerHTML = `<div class="empty"><h3>Nothing published yet</h3>
+      <p>Handle the <code>:app_home_opened</code> event and publish a view with
+      <code>Slink.API.publish_view/3</code> — it will show up here, like Slack's App Home tab.
+      Opening this tab has already sent the event.</p></div>`;
+  } else {
+    pane.innerHTML = `<div class="bk">${renderBlocks(home.blocks || [], { source: "home" })}</div>`;
+  }
+}
+
+// ── Block Kit ────────────────────────────────────────────
+function renderBlocks(blocks, ctx) {
+  return blocks.map((b) => renderBlock(b, ctx)).join("");
+}
+
+function renderBlock(b, ctx) {
+  switch (b.type) {
+    case "header":
+      return `<div class="bk-header">${esc(b.text?.text || "")}</div>`;
+    case "section": {
+      const txt = b.text ? `<div class="txt">${bkText(b.text)}</div>` : "";
+      const fields = b.fields
+        ? `<div class="bk-fields">${b.fields.map((f) => `<div>${bkText(f)}</div>`).join("")}</div>` : "";
+      const acc = b.accessory ? renderElement(b.accessory, ctx) : "";
+      return `<div class="bk-section">${txt}${fields}${acc}</div>`;
+    }
+    case "divider":
+      return `<hr>`;
+    case "context": {
+      const parts = (b.elements || []).map((el) =>
+        el.type === "image" ? `<img src="${esc(el.image_url)}" alt="${esc(el.alt_text || "")}">` : bkText(el));
+      return `<div class="bk-context">${parts.join("")}</div>`;
+    }
+    case "image": {
+      const title = b.title ? `<div class="bk-img-title">${esc(b.title.text)}</div>` : "";
+      return `${title}<img class="bk-img" src="${esc(b.image_url)}" alt="${esc(b.alt_text || "")}">`;
+    }
+    case "actions":
+      return `<div class="bk-actions">${(b.elements || []).map((el) => renderElement(el, ctx)).join("")}</div>`;
+    default:
+      return unknown(b);
+  }
+}
+
+function renderElement(el, ctx) {
+  switch (el.type) {
+    case "button": {
+      const style = el.style ? ` ${esc(el.style)}` : "";
+      if (el.url) return `<a class="bk-btn${style}" href="${esc(el.url)}" target="_blank">${esc(el.text?.text || "")}</a>`;
+      return `<button class="bk-btn${style}" onclick='uiAction(${attr(ctx)}, ${attr({
+        type: "button", action_id: el.action_id, value: el.value ?? null,
+      })})'>${esc(el.text?.text || "")}</button>`;
+    }
+    case "static_select": {
+      const opts = (el.options || []).map((o, i) =>
+        `<option value="${i}">${esc(o.text?.text || o.value)}</option>`).join("");
+      return `<select class="bk-select" data-options='${esc(JSON.stringify(el.options || []))}'
+        onchange='uiSelect(this, ${attr(ctx)}, ${attr({ action_id: el.action_id })})'>
+        <option value="" selected disabled>${esc(el.placeholder?.text || "Choose…")}</option>${opts}</select>`;
+    }
+    case "image":
+      return `<img class="bk-img" style="max-width:60px" src="${esc(el.image_url)}" alt="${esc(el.alt_text || "")}">`;
+    default:
+      return unknown(el);
+  }
+}
+
+function unknown(b) {
+  return `<details class="bk-unknown"><summary>unrendered ${esc(b.type || "block")}</summary>
+    <pre>${esc(JSON.stringify(b, null, 2))}</pre></details>`;
+}
+
+function bkText(t) {
+  if (!t) return "";
+  return t.type === "mrkdwn" ? mrkdwn(t.text || "") : esc(t.text || "");
+}
+
+async function uiAction(ctx, action) {
+  await post("/ui/action", { ...ctx, action });
+}
+
+async function uiSelect(sel, ctx, base) {
+  const options = JSON.parse(sel.dataset.options);
+  const chosen = options[Number(sel.value)];
+  if (!chosen) return;
+  await post("/ui/action", { ...ctx, action: { type: "static_select", ...base, selected_option: chosen } });
+}
+
+// ── Modal ────────────────────────────────────────────────
+function renderModal() {
+  const overlay = document.getElementById("overlay");
+  const stack = state.views.stack || [];
+  const json = JSON.stringify(stack);
+  if (json === lastViewsJson) return;  // don't clobber inputs the user is typing in
+  lastViewsJson = json;
+  if (!stack.length) { overlay.hidden = true; overlay.innerHTML = ""; return; }
+
+  const view = stack[stack.length - 1];
+  overlay.hidden = false;
+  const submit = view.submit ? `<button class="bk-btn primary" onclick="submitModal('${view.id}')">${esc(view.submit.text || "Submit")}</button>` : "";
+  const close = view.close?.text || "Cancel";
+  const stackNote = stack.length > 1 ? `<span class="stack-note">${stack.length} views stacked</span>` : "";
+  overlay.innerHTML = `
+    <div class="modal">
+      <header>${esc(view.title?.text || "Modal")}
+        <button class="x" onclick="closeModal('${view.id}')">✕</button></header>
+      <div class="mbody">${(view.blocks || []).map((b) => renderModalBlock(b, view)).join("")}</div>
+      <footer>${stackNote}
+        <button class="bk-btn" onclick="closeModal('${view.id}')">${esc(close)}</button>${submit}</footer>
+    </div>`;
+}
+
+function renderModalBlock(b, view) {
+  if (b.type !== "input") return renderBlock(b, { view_id: view.id });
+  const el = b.element || {};
+  const blockId = b.block_id || el.action_id || "block";
+  const optional = b.optional ? `<span class="optional">(optional)</span>` : "";
+  const hint = b.hint ? `<div class="hint">${esc(b.hint.text || "")}</div>` : "";
+  let input = "";
+  if (el.type === "plain_text_input") {
+    const ph = esc(el.placeholder?.text || "");
+    const val = esc(el.initial_value || "");
+    input = el.multiline
+      ? `<textarea rows="3" placeholder="${ph}" data-block="${esc(blockId)}" data-action="${esc(el.action_id)}" data-kind="plain_text_input">${val}</textarea>`
+      : `<input type="text" placeholder="${ph}" value="${val}" data-block="${esc(blockId)}" data-action="${esc(el.action_id)}" data-kind="plain_text_input">`;
+  } else if (el.type === "static_select") {
+    const opts = (el.options || []).map((o, i) =>
+      `<option value="${i}">${esc(o.text?.text || o.value)}</option>`).join("");
+    input = `<select data-block="${esc(blockId)}" data-action="${esc(el.action_id)}" data-kind="static_select"
+      data-options='${esc(JSON.stringify(el.options || []))}'>
+      <option value="" selected disabled>${esc(el.placeholder?.text || "Choose…")}</option>${opts}</select>`;
+  } else {
+    input = unknown(el);
+  }
+  return `<div class="m-input" data-input-block="${esc(blockId)}">
+    <label>${esc(b.label?.text || "")} ${optional}</label>${input}${hint}
+    <div class="error" data-error-for="${esc(blockId)}"></div></div>`;
+}
+
+function collectValues() {
+  const values = {};
+  document.querySelectorAll("#overlay [data-kind]").forEach((el) => {
+    const block = el.dataset.block, action = el.dataset.action, kind = el.dataset.kind;
+    values[block] = values[block] || {};
+    if (kind === "plain_text_input") {
+      values[block][action] = { type: kind, value: el.value };
+    } else if (kind === "static_select") {
+      const options = JSON.parse(el.dataset.options);
+      const chosen = options[Number(el.value)];
+      values[block][action] = { type: kind, selected_option: chosen || null };
+    }
+  });
+  return values;
+}
+
+async function submitModal(viewId) {
+  const resp = await post("/ui/view_submission", { view_id: viewId, values: collectValues() });
+  const ack = resp.ack || {};
+  if (ack.response_action === "errors") {
+    // Show the errors inline; the view (and typed values) stay put.
+    document.querySelectorAll("#overlay .m-input").forEach((el) => el.classList.remove("invalid"));
+    document.querySelectorAll("#overlay [data-error-for]").forEach((el) => (el.textContent = ""));
+    for (const [block, msg] of Object.entries(ack.errors || {})) {
+      const err = document.querySelector(`#overlay [data-error-for="${CSS.escape(block)}"]`);
+      if (err) { err.textContent = msg; err.closest(".m-input").classList.add("invalid"); }
+    }
+  }
+}
+
+async function closeModal(viewId) {
+  await post("/ui/view_closed", { view_id: viewId });
+}
+
+// ── Reactions ────────────────────────────────────────────
+function togglePicker(ts) {
+  const key = `${currentChannel}|${ts}`;
+  openPicker = openPicker === key ? null : key;
+  render();
+}
+
+async function pickReaction(ts, name) {
+  openPicker = null;
+  await post("/ui/reaction", { op: "add", channel: currentChannel, ts, name });
+}
+
+async function toggleReaction(ts, name, mine) {
+  await post("/ui/reaction", { op: mine ? "remove" : "add", channel: currentChannel, ts, name });
+}
+
+// ── Composer ─────────────────────────────────────────────
+const input = document.getElementById("input");
+const threadInput = document.getElementById("thread-input");
+const hintEl = document.getElementById("composer-hint");
+const auto = document.getElementById("autocomplete");
+
+input.addEventListener("keydown", composerKeydown);
+input.addEventListener("input", composerChanged);
+threadInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage(threadInput.value, openThreadTs);
+    threadInput.value = "";
+  }
+});
+
+function composerKeydown(e) {
+  if (!auto.hidden && (e.key === "Enter" || e.key === "Tab")) {
+    e.preventDefault();
+    acceptMention();
+    return;
+  }
+  if (e.key === "Escape") auto.hidden = true;
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+}
+
+function composerChanged() {
+  const text = input.value;
+  if (text.startsWith("/")) {
+    const [cmd, ...rest] = text.split(" ");
+    hintEl.innerHTML = `Run <b>${esc(cmd)}</b>${rest.length ? ` with text “${esc(rest.join(" "))}”` : ""} — Enter to send`;
+  } else {
+    hintEl.textContent = "";
+  }
+  // A trailing "@…" offers the only other member: the bot.
+  const m = text.match(/(^|\s)@(\w*)$/);
+  if (m && state && state.bot.name.startsWith(m[2])) {
+    auto.hidden = false;
+    auto.innerHTML = `<div class="opt sel" onclick="acceptMention()">🤖 @${esc(state.bot.name)}</div>`;
+  } else {
+    auto.hidden = true;
+  }
+}
+
+function acceptMention() {
+  input.value = input.value.replace(/(^|\s)@\w*$/, `$1@${state.bot.name} `);
+  auto.hidden = true;
+  input.focus();
+}
+
+function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  hintEl.textContent = "";
+  auto.hidden = true;
+  if (text.startsWith("/")) {
+    const [command, ...rest] = text.split(" ");
+    post("/ui/slash", { channel: currentChannel, command, text: rest.join(" ") });
+  } else {
+    sendMessage(text, null);
+  }
+}
+
+function sendMessage(text, threadTs) {
+  text = text.trim();
+  if (!text) return;
+  // Typed @slinkbot becomes real Slack mention markup.
+  text = text.replaceAll(`@${state.bot.name}`, `<@${state.bot.user_id}>`);
+  post("/ui/message", { channel: currentChannel, text, thread_ts: threadTs });
+}
+
+// ── Inspector ────────────────────────────────────────────
+function toggleInspector() {
+  inspectorOpen = !inspectorOpen;
+  document.getElementById("inspector").classList.toggle("open", inspectorOpen);
+  document.getElementById("inspector-caret").textContent = inspectorOpen ? "▾" : "▸";
+  render();
+}
+
+function toggleEntry(id) {
+  expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+  render();
+}
+
+async function redeliver(id) {
+  await post("/ui/redeliver", { entry_id: id });
+}
+
+function renderInspector() {
+  document.getElementById("inspector-count").textContent = `(${state.inspector.length})`;
+  if (!inspectorOpen) return;
+  const list = document.getElementById("inspector-list");
+  list.innerHTML = state.inspector.map((e) => {
+    const failed = e.response && e.response.ok === false;
+    const open = expanded.has(e.id);
+    return `
+      <div class="entry${open ? " open" : ""}">
+        <div class="row" onclick="toggleEntry(${e.id})">
+          <span class="dir ${e.dir}">${e.dir === "in" ? "▲" : "▼"}</span>
+          <span class="label">${esc(e.label)}</span>
+          ${e.stubbed ? `<span class="badge">stubbed</span>` : ""}
+          ${failed ? `<span class="badge err-badge">${esc(e.response.error || "error")}</span>` : ""}
+          <span class="spacer"></span>
+          ${e.dir === "in" && e.label !== "view_submission"
+            ? `<button class="redeliver" onclick="event.stopPropagation(); redeliver(${e.id})">redeliver</button>` : ""}
+        </div>
+        <div class="detail">
+          <h4>${e.dir === "in" ? "envelope" : "request"}</h4><pre>${esc(JSON.stringify(e.request, null, 2))}</pre>
+          ${e.response ? `<h4>response</h4><pre>${esc(JSON.stringify(e.response, null, 2))}</pre>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+// ── Text helpers ─────────────────────────────────────────
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// A small, honest subset of Slack mrkdwn. Escape first, then decorate.
+function mrkdwn(s) {
+  let t = esc(s);
+  t = t.replace(/```([\s\S]+?)```/g, (_, code) => `<pre>${code}</pre>`);
+  t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+  t = t.replace(/&lt;@(U\w+)&gt;/g, (_, id) =>
+    `<span class="mention">@${id === state.bot.user_id ? state.bot.name : id === state.you ? "you" : id}</span>`);
+  t = t.replace(/&lt;#(C\w+)(?:\|([^&]*))?&gt;/g, (_, id, label) => {
+    const c = state.channels.find((ch) => ch.id === id);
+    return `<span class="mention">#${label || (c ? c.name : id)}</span>`;
+  });
+  t = t.replace(/&lt;(https?:[^|&\s]+)\|([^&]+)&gt;/g, '<a href="$1" target="_blank">$2</a>');
+  t = t.replace(/&lt;(https?:[^&\s]+)&gt;/g, '<a href="$1" target="_blank">$1</a>');
+  t = t.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,!?])/g, "$1<b>$2</b>");
+  t = t.replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,!?])/g, "$1<i>$2</i>");
+  t = t.replace(/:([a-z0-9_+-]+):/g, (all, name) => EMOJI[name] || all);
+  return t;
+}
+
+function emoji(name) { return EMOJI[name] || `:${name}:`; }
+
+function fmtTs(ts) {
+  const d = new Date(parseFloat(ts) * 1000);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// For embedding JSON in single-quoted inline handlers.
+function attr(obj) { return JSON.stringify(obj).replaceAll("'", "&#39;"); }
+
+// Close pickers on outside clicks.
+document.addEventListener("click", (e) => {
+  if (openPicker && !e.target.closest(".picker") && !e.target.closest(".msg-actions")) {
+    openPicker = null;
+    render();
+  }
+});
+</script>
+</body>
+</html>

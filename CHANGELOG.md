@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`Slink.Playground`** — a local fake Slack. A Slack-like web UI served on
+  localhost: messages, threads, mentions, ephemeral replies, slash commands,
+  Block Kit buttons/selects, modals (with the real `view_submission` sync-ack,
+  so validation errors render), reactions, App Home, streamed replies, and an
+  inspector showing every raw envelope and Web API call — with a *redeliver*
+  button to demo dedup. Inbound events go through the production normaliser
+  and dispatcher; outbound calls travel the real rate limiter and HTTP client
+  into the fake workspace (the playground points `:api_base_url` at itself).
+  Compiled out of slink unless `config :slink, playground: true` is set, and
+  needs the optional `:bandit` dep. See the new
+  [Playground guide](guides/playground.md).
+
 ## [0.6.0] - 2026-07-17
 
 The whole roadmap in one release: quality-of-life helpers (DMs, ephemeral

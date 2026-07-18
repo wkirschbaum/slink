@@ -195,6 +195,20 @@ assert [{"chat.postMessage", %{text: "hi" <> _}}] = run.calls
 
 → **[Testing your bot](guides/testing.md)**
 
+## Try it without Slack
+
+`Slink.Playground` serves a Slack-like web UI on localhost: type messages, run
+slash commands, click buttons, submit modals — your bot handles real events
+through the production pipeline, and everything it sends back renders live,
+with an inspector showing the raw payloads. Compiled out unless you opt in:
+
+```elixir
+# config/dev.exs                        # dev supervision tree
+config :slink, playground: true         {Slink.Playground, module: MyBot, port: 4040}
+```
+
+→ **[Playground](guides/playground.md)**
+
 ## Going to production
 
 Run the Events API plug (standalone Bandit or mounted in Phoenix), or stay on
