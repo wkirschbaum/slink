@@ -5,19 +5,7 @@ defmodule Slink.Playground.SSETest do
   @name PlaygroundSSETest
 
   setup do
-    stub = Application.get_env(:slink, :identity_fetch)
-    Application.delete_env(:slink, :identity_fetch)
-
-    start_supervised!(
-      {Slink.Playground, module: Slink.Test.PlaygroundTestBot, port: 0, name: @name}
-    )
-
-    on_exit(fn ->
-      Application.put_env(:slink, :identity_fetch, stub)
-      Application.delete_env(:slink, :api_base_url)
-    end)
-
-    %{base: Slink.Playground.url(@name)}
+    %{base: Slink.Test.PlaygroundSetup.start!(@name)}
   end
 
   test "the UI page is served", %{base: base} do
@@ -42,10 +30,21 @@ defmodule Slink.Playground.SSETest do
 
     {:ok, _} = Slink.API.post_message("xoxb-playground", "C0GENERAL", "ping")
 
-    frame = read_frame(socket)
-    assert %{"messages" => %{"C0GENERAL" => [%{"text" => "ping"}]}} = decode_frame(frame)
+    # Background activity (the boot-time auth.test) may broadcast frames of its
+    # own — scan until the posted message shows up.
+    assert await_frame(socket, fn state ->
+             match?(%{"messages" => %{"C0GENERAL" => [%{"text" => "ping"}]}}, state)
+           end)
 
     :gen_tcp.close(socket)
+  end
+
+  defp await_frame(socket, fun, tries \\ 10) do
+    cond do
+      tries == 0 -> false
+      fun.(decode_frame(read_frame(socket))) -> true
+      true -> await_frame(socket, fun, tries - 1)
+    end
   end
 
   # Read until a complete `data: …` line has arrived (frames are single lines).
@@ -55,8 +54,9 @@ defmodule Slink.Playground.SSETest do
     if Regex.match?(~r/data: .+\n/, acc), do: acc, else: read_frame(socket, acc)
   end
 
+  # One read may carry several frames; the last data line is the newest state.
   defp decode_frame(data) do
-    [_, json] = Regex.run(~r/data: (.*)/, data)
+    [_, json] = ~r/data: (.*)/ |> Regex.scan(data) |> List.last()
     JSON.decode!(json)
   end
 end

@@ -369,7 +369,8 @@ function renderHeader() {
   if (onHome) {
     h.innerHTML = `🏠 slinkbot <span class="sub">App Home</span>`;
   } else {
-    const c = channel(currentChannel);
+    let c = channel(currentChannel);
+    if (!c) { c = state.channels[0]; currentChannel = c.id; }
     h.innerHTML = c.is_im
       ? `<span class="presence" style="color:#2bac76">●</span> ${esc(c.name)} <span class="sub">direct message</span>`
       : `# ${esc(c.name)}`;
@@ -423,7 +424,7 @@ function renderReactions(m) {
   const pills = m.reactions.map((r) => {
     const mine = r.users.includes(state.you);
     return `<span class="reaction${mine ? " mine" : ""}" title=":${esc(r.name)}:"
-      onclick="toggleReaction('${m.ts}', '${esc(r.name)}', ${mine})">${emoji(r.name)} ${r.count}</span>`;
+      onclick="toggleReaction('${m.ts}', '${jsStr(r.name)}', ${mine})">${emoji(r.name)} ${r.count}</span>`;
   });
   return `<div class="reactions">${pills.join("")}</div>`;
 }
@@ -509,7 +510,9 @@ function renderElement(el, ctx) {
   switch (el.type) {
     case "button": {
       const style = el.style ? ` ${esc(el.style)}` : "";
-      if (el.url) return `<a class="bk-btn${style}" href="${esc(el.url)}" target="_blank">${esc(el.text?.text || "")}</a>`;
+      // Only web schemes may become links — never javascript:/data: etc.
+      if (el.url && /^https?:\/\//i.test(el.url))
+        return `<a class="bk-btn${style}" href="${esc(el.url)}" target="_blank">${esc(el.text?.text || "")}</a>`;
       return `<button class="bk-btn${style}" onclick='uiAction(${attr(ctx)}, ${attr({
         type: "button", action_id: el.action_id, value: el.value ?? null,
       })})'>${esc(el.text?.text || "")}</button>`;
@@ -800,8 +803,14 @@ function fmtTs(ts) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-// For embedding JSON in single-quoted inline handlers.
+// For embedding JSON in single-quoted inline handlers. Entities inside a
+// single-quoted attribute decode after tokenization, so &#39; is safe there.
 function attr(obj) { return JSON.stringify(obj).replaceAll("'", "&#39;"); }
+
+// For a string inside a single-quoted JS literal within a DOUBLE-quoted
+// attribute: entity-escaping alone decodes back to a raw quote in the JS
+// source, so backslash-escape for JS first, then entity-escape for HTML.
+function jsStr(s) { return esc(String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'")); }
 
 // Close pickers on outside clicks.
 document.addEventListener("click", (e) => {

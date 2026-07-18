@@ -5,7 +5,9 @@ if Application.compile_env(:slink, :playground, false) do
     # The fake Slack Web API: pure state transitions over the workspace state,
     # one clause per method. Requests arrive string-keyed (decoded JSON or form
     # bodies — exactly what the real API receives); replies follow Slack's
-    # convention of HTTP 200 with the real status in "ok".
+    # convention of HTTP 200 with the real status in "ok". All message and
+    # view-stack semantics live here, so UI-initiated changes (via Workspace)
+    # and API-initiated ones can't drift apart.
 
     @doc """
     Handle a Web API `method`. Returns `{reply, state, :handled | :stubbed}` —
@@ -75,18 +77,9 @@ if Application.compile_env(:slink, :playground, false) do
     end
 
     defp handle(state, "chat.delete", %{"channel" => channel, "ts" => ts}) do
-      case pop_message(state, channel, ts) do
-        {:ok, _msg, state} ->
-          # Deleting a thread root takes its replies with it, like Slack does.
-          state =
-            update_channel(state, channel, fn msgs ->
-              Enum.reject(msgs, &(&1["thread_ts"] == ts))
-            end)
-
-          {%{"ok" => true, "channel" => channel, "ts" => ts}, state}
-
-        :error ->
-          {error(not_found_error(state, channel)), state}
+      case delete_message(state, channel, ts) do
+        {:ok, state} -> {%{"ok" => true, "channel" => channel, "ts" => ts}, state}
+        :error -> {error(not_found_error(state, channel)), state}
       end
     end
 
@@ -122,6 +115,8 @@ if Application.compile_env(:slink, :playground, false) do
       if channel?(state, channel) do
         messages =
           state.messages[channel]
+          # Ephemeral messages never appear in history, like Slack.
+          |> Enum.reject(& &1["ephemeral"])
           |> Enum.filter(&top_level?/1)
           |> Enum.reverse()
 
@@ -134,7 +129,7 @@ if Application.compile_env(:slink, :playground, false) do
     defp handle(state, "conversations.replies", %{"channel" => channel, "ts" => ts}) do
       messages =
         Enum.filter(state.messages[channel] || [], fn msg ->
-          msg["ts"] == ts or msg["thread_ts"] == ts
+          (msg["ts"] == ts or msg["thread_ts"] == ts) and !msg["ephemeral"]
         end)
 
       case messages do
@@ -143,29 +138,16 @@ if Application.compile_env(:slink, :playground, false) do
       end
     end
 
-    defp handle(state, "views.open", %{"view" => view}) when is_map(view) do
-      {view, state} = mint_view(state, view)
-      state = update_in(state.views["stack"], &(&1 ++ [view]))
-      {%{"ok" => true, "view" => view}, state}
-    end
-
-    defp handle(state, "views.push", %{"view" => view}) when is_map(view) do
-      {view, state} = mint_view(state, view)
-      state = update_in(state.views["stack"], &(&1 ++ [view]))
+    defp handle(state, method, %{"view" => view})
+         when method in ["views.open", "views.push"] and is_map(view) do
+      {view, state} = push_view(state, view)
       {%{"ok" => true, "view" => view}, state}
     end
 
     defp handle(state, "views.update", %{"view" => view} = params) when is_map(view) do
-      id = params["view_id"]
-
-      case Enum.split_while(state.views["stack"], &(&1["id"] != id)) do
-        {_before, []} ->
-          {error("not_found"), state}
-
-        {before, [old | rest]} ->
-          view = view |> Map.put("id", old["id"]) |> Map.put_new("state", empty_view_state())
-          state = put_in(state.views["stack"], before ++ [view | rest])
-          {%{"ok" => true, "view" => view}, state}
+      case replace_view(state, params["view_id"], view) do
+        {:ok, view, state} -> {%{"ok" => true, "view" => view}, state}
+        :error -> {error("not_found"), state}
       end
     end
 
@@ -182,6 +164,11 @@ if Application.compile_env(:slink, :playground, false) do
 
         not is_binary(params["thread_ts"]) ->
           # Slack only streams into threads; slink always passes thread_ts.
+          {error("invalid_arguments"), state}
+
+        channel != dm_id(state) and not is_binary(params["recipient_user_id"]) ->
+          # Streaming outside the app DM needs recipient params, like Slack —
+          # so stream_reply/3's degrade-to-postMessage path is exercised here.
           {error("invalid_arguments"), state}
 
         true ->
@@ -246,34 +233,40 @@ if Application.compile_env(:slink, :playground, false) do
 
     defp handle(state, "files.completeUploadExternal", %{"files" => files} = params)
          when is_list(files) do
-      {completed, state} =
-        Enum.map_reduce(files, state, fn %{"id" => id} = spec, state ->
-          state =
-            update_in(state.files[id], fn file ->
-              (file || %{"id" => id})
-              |> Map.delete("pending")
-              |> put_present("title", spec["title"])
-            end)
+      if Enum.all?(files, &is_binary(&1["id"])) do
+        {completed, state} =
+          Enum.map_reduce(files, state, fn spec, state ->
+            id = spec["id"]
 
-          {state.files[id], state}
-        end)
+            state =
+              update_in(state.files[id], fn file ->
+                (file || %{"id" => id})
+                |> Map.delete("pending")
+                |> put_present("title", spec["title"])
+              end)
 
-      state =
-        case params["channel_id"] do
-          channel when is_binary(channel) ->
-            {msg, state} =
-              bot_message(state, %{
-                "text" => params["initial_comment"] || "",
-                "thread_ts" => params["thread_ts"]
-              })
+            {state.files[id], state}
+          end)
 
-            put_message(state, channel, Map.put(msg, "files", completed))
+        state =
+          case params["channel_id"] do
+            channel when is_binary(channel) ->
+              {msg, state} =
+                bot_message(state, %{
+                  "text" => params["initial_comment"] || "",
+                  "thread_ts" => params["thread_ts"]
+                })
 
-          _no_share ->
-            state
-        end
+              put_message(state, channel, Map.put(msg, "files", completed))
 
-      {%{"ok" => true, "files" => completed}, state}
+            _no_share ->
+              state
+          end
+
+        {%{"ok" => true, "files" => completed}, state}
+      else
+        {error("invalid_arguments"), state}
+      end
     end
 
     defp handle(_state, _method, _params), do: :stub
@@ -282,22 +275,25 @@ if Application.compile_env(:slink, :playground, false) do
     Handle a post to a minted `response_url` (see `Slink.API.respond/2`).
 
     Implements Slack's semantics: `replace_original` / `delete_original` act on
-    the message the URL was minted against; otherwise a new message is posted —
-    ephemeral by default, in-channel with `response_type: "in_channel"`.
-    Returns `{reply, state}` or `:unknown_token`.
+    the message the URL refers to — the interaction's source message, or, for a
+    slash command, the last response posted through the URL; otherwise a new
+    message is posted — ephemeral by default, in-channel with
+    `response_type: "in_channel"`. Returns `{reply, state}` or `:unknown_token`.
     """
     def respond(state, token, params) do
       case state.response_urls[token] do
         nil -> :unknown_token
-        target -> {%{"ok" => true}, do_respond(state, target, params)}
+        target -> {%{"ok" => true}, do_respond(state, token, target, params)}
       end
     end
 
-    defp do_respond(state, %{"channel" => channel, "message_ts" => ts}, params) do
+    defp do_respond(state, token, %{"channel" => channel} = target, params) do
+      ts = target["message_ts"] || target["response_ts"]
+
       cond do
         params["delete_original"] in [true, "true"] and is_binary(ts) ->
-          case pop_message(state, channel, ts) do
-            {:ok, _msg, state} -> state
+          case delete_message(state, channel, ts) do
+            {:ok, state} -> state
             :error -> state
           end
 
@@ -332,11 +328,14 @@ if Application.compile_env(:slink, :playground, false) do
               _ -> msg
             end
 
-          put_message(state, channel, msg)
+          state = put_message(state, channel, msg)
+          # For a slash-style URL (no source message), later replace/delete
+          # calls target this response — Slack's behaviour.
+          put_in(state.response_urls[token]["response_ts"], msg["ts"])
       end
     end
 
-    ## Shared state helpers (used by Workspace for UI-initiated changes too)
+    ## Message helpers (used by Workspace for UI-initiated changes too)
 
     @doc "Mint the next seq number."
     def next_seq(state), do: {state.seq + 1, %{state | seq: state.seq + 1}}
@@ -349,14 +348,58 @@ if Application.compile_env(:slink, :playground, false) do
          String.pad_leading(Integer.to_string(rem(n, 1_000_000)), 6, "0"), state}
     end
 
+    @doc "Build the human's message, with a minted ts."
+    def human_message(state, text, thread_ts) do
+      new_message(state, state.user_id, %{"text" => text, "thread_ts" => thread_ts})
+    end
+
+    # The one place the stored wire shape of a message is defined.
+    defp new_message(state, user, params) do
+      {ts, state} = next_ts(state)
+
+      msg =
+        %{"type" => "message", "ts" => ts, "user" => user, "text" => params["text"] || ""}
+        |> put_present("blocks", params["blocks"])
+        |> put_present("attachments", params["attachments"])
+        |> put_present("thread_ts", params["thread_ts"])
+
+      {msg, state}
+    end
+
+    defp bot_message(state, params) do
+      {msg, state} = new_message(state, state.bot_user_id, params)
+      {Map.put(msg, "bot_id", state.bot_id), state}
+    end
+
     @doc "Append a message to a channel, bumping its thread root's reply_count."
     def put_message(state, channel, msg) do
       state = update_channel(state, channel, &(&1 ++ [msg]))
+      bump_reply_count(state, channel, msg, +1)
+    end
+
+    @doc "Remove the message at channel/ts — and its replies, when it's a thread root."
+    def delete_message(state, channel, ts) do
+      case pop_message(state, channel, ts) do
+        {:ok, msg, state} ->
+          state =
+            state
+            |> update_channel(channel, &Enum.reject(&1, fn m -> m["thread_ts"] == ts end))
+            |> bump_reply_count(channel, msg, -1)
+
+          {:ok, state}
+
+        :error ->
+          :error
+      end
+    end
+
+    # A message entering or leaving a thread adjusts its root's reply_count.
+    defp bump_reply_count(state, channel, msg, delta) do
       root = msg["thread_ts"]
 
       if is_binary(root) and root != msg["ts"] do
         case update_message(state, channel, root, fn m ->
-               Map.update(m, "reply_count", 1, &(&1 + 1))
+               Map.update(m, "reply_count", max(delta, 0), &max(&1 + delta, 0))
              end) do
           {:ok, state} -> state
           :error -> state
@@ -447,38 +490,80 @@ if Application.compile_env(:slink, :playground, false) do
       end
     end
 
-    defp update_channel(state, channel, fun) do
-      update_in(state.messages[channel], fn msgs -> fun.(msgs || []) end)
+    ## View-stack helpers — the single home of modal semantics, shared by the
+    ## Web API methods above and the view_submission ack path (via Workspace).
+
+    @doc "Fetch a view: `:home`, or an id from the stack or the Home tab."
+    def find_view(state, :home) do
+      case state.views["home"] do
+        nil -> :error
+        view -> {:ok, view}
+      end
     end
 
-    defp put_reactions(state, channel, ts, reactions) do
-      update_message(state, channel, ts, fn msg ->
-        if reactions == [] do
-          Map.delete(msg, "reactions")
-        else
-          Map.put(msg, "reactions", reactions)
-        end
+    def find_view(state, view_id) do
+      cond do
+        state.views["home"] && state.views["home"]["id"] == view_id ->
+          {:ok, state.views["home"]}
+
+        view = Enum.find(state.views["stack"], &(&1["id"] == view_id)) ->
+          {:ok, view}
+
+        true ->
+          :error
+      end
+    end
+
+    @doc "Remove `view_id` from the modal stack."
+    def drop_view(state, view_id) do
+      update_in(state.views["stack"], fn stack ->
+        Enum.reject(stack, &(&1["id"] == view_id))
       end)
     end
 
-    ## Private helpers
+    @doc """
+    Apply a `view_submission` ack (string-keyed) to the modal stack, exactly
+    as Slack's `response_action` semantics: errors keep the modal, `clear`
+    empties the stack, `update` replaces the submitted view, `push` stacks a
+    new one, anything else closes the submitted view.
+    """
+    def apply_ack(state, view_id, ack) do
+      case ack["response_action"] do
+        "errors" ->
+          state
 
-    defp bot_message(state, params) do
-      {ts, state} = next_ts(state)
+        "clear" ->
+          put_in(state.views["stack"], [])
 
-      msg =
-        %{
-          "type" => "message",
-          "ts" => ts,
-          "user" => state.bot_user_id,
-          "bot_id" => state.bot_id,
-          "text" => params["text"] || ""
-        }
-        |> put_present("blocks", params["blocks"])
-        |> put_present("attachments", params["attachments"])
-        |> put_present("thread_ts", params["thread_ts"])
+        "update" ->
+          case replace_view(state, view_id, ack["view"] || %{}) do
+            {:ok, _view, state} -> state
+            :error -> state
+          end
 
-      {msg, state}
+        "push" ->
+          {_view, state} = push_view(state, ack["view"] || %{})
+          state
+
+        _close ->
+          drop_view(state, view_id)
+      end
+    end
+
+    defp push_view(state, view) do
+      {view, state} = mint_view(state, view)
+      {view, update_in(state.views["stack"], &(&1 ++ [view]))}
+    end
+
+    defp replace_view(state, view_id, view) do
+      case Enum.split_while(state.views["stack"], &(&1["id"] != view_id)) do
+        {_before, []} ->
+          :error
+
+        {before, [old | rest]} ->
+          view = view |> Map.put("id", old["id"]) |> Map.put_new("state", empty_view_state())
+          {:ok, view, put_in(state.views["stack"], before ++ [view | rest])}
+      end
     end
 
     defp mint_view(state, view) do
@@ -493,6 +578,25 @@ if Application.compile_env(:slink, :playground, false) do
     end
 
     defp empty_view_state, do: %{"values" => %{}}
+
+    ## Small shared helpers
+
+    def put_present(map, _key, nil), do: map
+    def put_present(map, key, value), do: Map.put(map, key, value)
+
+    defp update_channel(state, channel, fun) do
+      update_in(state.messages[channel], fn msgs -> fun.(msgs || []) end)
+    end
+
+    defp put_reactions(state, channel, ts, reactions) do
+      update_message(state, channel, ts, fn msg ->
+        if reactions == [] do
+          Map.delete(msg, "reactions")
+        else
+          Map.put(msg, "reactions", reactions)
+        end
+      end)
+    end
 
     defp page(messages) do
       %{
@@ -519,11 +623,17 @@ if Application.compile_env(:slink, :playground, false) do
 
     defp error(reason), do: %{"ok" => false, "error" => reason}
 
+    # Sizes arrive as strings from form-encoded bodies; never let a malformed
+    # one take the workspace down.
     defp int(value) when is_integer(value), do: value
-    defp int(value) when is_binary(value), do: String.to_integer(value)
-    defp int(_), do: 0
 
-    defp put_present(map, _key, nil), do: map
-    defp put_present(map, key, value), do: Map.put(map, key, value)
+    defp int(value) when is_binary(value) do
+      case Integer.parse(value) do
+        {n, _rest} -> n
+        :error -> 0
+      end
+    end
+
+    defp int(_), do: 0
   end
 end

@@ -81,7 +81,7 @@ if Application.compile_env(:slink, :playground, false) do
       result =
         case conn.body_params do
           %{"source" => "home"} ->
-            Events.view_action(workspace(conn), "VHOME", action)
+            Events.view_action(workspace(conn), :home, action)
 
           %{"view_id" => view_id} ->
             Events.view_action(workspace(conn), view_id, action)

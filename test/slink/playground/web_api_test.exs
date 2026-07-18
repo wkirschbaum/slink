@@ -7,28 +7,19 @@ defmodule Slink.Playground.WebApiTest do
   @token "xoxb-playground"
 
   setup do
-    # Let the boot-time auth.test resolve through the playground's fake API
-    # instead of the suite-wide :identity_fetch stub.
-    stub = Application.get_env(:slink, :identity_fetch)
-    Application.delete_env(:slink, :identity_fetch)
-
-    start_supervised!(
-      {Slink.Playground, module: Slink.Test.PlaygroundTestBot, port: 0, name: PlaygroundApiTest}
-    )
-
-    on_exit(fn ->
-      Application.put_env(:slink, :identity_fetch, stub)
-      Application.delete_env(:slink, :api_base_url)
-    end)
-
-    %{ws: PlaygroundApiTest.Workspace}
+    base = Slink.Test.PlaygroundSetup.start!(PlaygroundApiTest)
+    %{ws: PlaygroundApiTest.Workspace, base: base}
   end
 
-  test "boot points the Web API at the playground and resolves the bot identity" do
-    base = Slink.Playground.url(PlaygroundApiTest)
+  test "boot points the Web API at the playground and resolves the bot identity", %{base: base} do
     assert Application.get_env(:slink, :api_base_url) == base <> "/api"
 
     assert await(fn -> Slink.Identity.bot_user_id(@token) == "U0BOT" end)
+  end
+
+  test "stopping the playground restores :api_base_url" do
+    :ok = stop_supervised(PlaygroundApiTest)
+    assert Application.get_env(:slink, :api_base_url) == nil
   end
 
   test "Slink.API calls land in the workspace over real HTTP", %{ws: ws} do

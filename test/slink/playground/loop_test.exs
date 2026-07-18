@@ -11,23 +11,13 @@ defmodule Slink.Playground.LoopTest do
   @token "xoxb-playground"
 
   setup do
-    stub = Application.get_env(:slink, :identity_fetch)
-    Application.delete_env(:slink, :identity_fetch)
     # Don't make every test wait out Slack's 1s/channel pacing.
     Application.put_env(:slink, :rate_interval_ms, 10)
+    on_exit(fn -> Application.delete_env(:slink, :rate_interval_ms) end)
 
-    start_supervised!(
-      {Slink.Playground, module: Slink.Test.PlaygroundTestBot, port: 0, name: @name}
-    )
-
-    on_exit(fn ->
-      Application.put_env(:slink, :identity_fetch, stub)
-      Application.delete_env(:slink, :api_base_url)
-      Application.delete_env(:slink, :rate_interval_ms)
-    end)
-
+    base = Slink.Test.PlaygroundSetup.start!(@name)
     Workspace.subscribe(@ws)
-    %{base: Slink.Playground.url(@name)}
+    %{base: base}
   end
 
   test "a mention in the UI comes back as the bot's reply", %{base: base} do

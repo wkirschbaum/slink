@@ -9,19 +9,7 @@ defmodule Slink.Playground.ViewSubmissionTest do
   @ws Module.concat(@name, :Workspace)
 
   setup do
-    stub = Application.get_env(:slink, :identity_fetch)
-    Application.delete_env(:slink, :identity_fetch)
-
-    start_supervised!(
-      {Slink.Playground, module: Slink.Test.PlaygroundTestBot, port: 0, name: @name}
-    )
-
-    on_exit(fn ->
-      Application.put_env(:slink, :identity_fetch, stub)
-      Application.delete_env(:slink, :api_base_url)
-    end)
-
-    base = Slink.Playground.url(@name)
+    base = Slink.Test.PlaygroundSetup.start!(@name)
     Workspace.subscribe(@ws)
 
     # /modal makes the bot open its modal through the real views.open path.

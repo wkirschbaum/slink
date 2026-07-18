@@ -495,12 +495,7 @@ defmodule Slink.SocketMode do
 
   defp handle_message(%{"envelope_id" => id} = message, state) when is_binary(id) do
     event = Event.from_socket_mode(message)
-
-    context = %Context{
-      transport: :socket_mode,
-      bot_token: state.bot_token,
-      bot_user_id: Slink.Identity.bot_user_id(state.bot_token)
-    }
+    context = Context.socket_mode(state.bot_token)
 
     if Dispatcher.sync_ack?(event) do
       # A modal submit: Slack wants the response in the ACK. The handler runs

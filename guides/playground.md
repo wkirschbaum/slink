@@ -64,6 +64,14 @@ client — including Slack's ~1 message/second/channel pacing (lower
 `config :slink, :rate_interval_ms` if that slows your dev loop). Unknown API
 methods answer a generic `ok: true` and are tagged *stubbed* in the inspector.
 
+Like Slack, `chat.startStream` outside the app DM requires the
+`recipient_user_id`/`recipient_team_id` start params — so a `stream_reply/3`
+into a channel without them degrades to a plain post in the playground exactly
+as it would in production. And a `response_url` behaves per surface: for an
+interaction, `replace_original` rewrites the source message; after a slash
+command, it rewrites the response it previously posted (the
+`update_original/3` pattern).
+
 Deliberate deviations, in the interest of staying small:
 
 - One human user (`U0DEV`) and one bot. Ephemeral messages are a styled flag
@@ -74,9 +82,9 @@ Deliberate deviations, in the interest of staying small:
   feedback loops with `working/3`).
 - No HTTP 429 simulation; genuine rate-limit handling is covered by
   `Slink.API`'s tests.
-- The `:api_base_url` takeover is VM-global and not restored on shutdown —
-  don't run a real transport in the same VM (a warning is logged if a
-  `Slink.SocketMode` client is running).
+- The `:api_base_url` takeover is VM-global while the playground runs (it is
+  restored when the playground stops cleanly) — don't run a real transport in
+  the same VM (a warning is logged if a `Slink.SocketMode` client is running).
 
 Because the fake workspace also answers reads (`conversations.history`,
 `conversations.replies`, `conversations.info`), bots that look back at the

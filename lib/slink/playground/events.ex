@@ -19,16 +19,16 @@ if Application.compile_env(:slink, :playground, false) do
       info = Workspace.info(ws)
       {:ok, msg} = Workspace.put_human_message(ws, channel, text, thread_ts)
 
-      inner =
-        %{
-          "type" => "message",
-          "user" => info.user_id,
-          "channel" => channel,
-          "channel_type" => channel_type(info, channel),
-          "ts" => msg["ts"],
-          "text" => text
-        }
-        |> put_present("thread_ts", thread_ts)
+      inner = %{
+        "type" => "message",
+        "user" => info.user_id,
+        "channel" => channel,
+        "channel_type" => channel_type(info, channel),
+        "ts" => msg["ts"],
+        "text" => text
+      }
+
+      inner = if thread_ts, do: Map.put(inner, "thread_ts", thread_ts), else: inner
 
       dispatch(ws, info, event_callback(info, inner))
 
@@ -88,7 +88,10 @@ if Application.compile_env(:slink, :playground, false) do
       end
     end
 
-    @doc "The human clicked an interactive element on a view (App Home or a modal)."
+    @doc """
+    The human clicked an interactive element on a view — `:home` for the App
+    Home tab, or a modal's view id.
+    """
     def view_action(ws, view_id, action) do
       info = Workspace.info(ws)
 
@@ -215,13 +218,13 @@ if Application.compile_env(:slink, :playground, false) do
       Dispatcher.async(info.module, event, context(info))
     end
 
-    # Exactly the context the Socket Mode transport builds per event.
+    # The context the Socket Mode transport builds per event — same
+    # constructor. The static workspace identity backstops the brief boot
+    # window before the prewarmed auth.test lands in the Identity cache, so
+    # mentions_me?/1 is never blind in the playground.
     defp context(info) do
-      %Context{
-        transport: :socket_mode,
-        bot_token: info.bot_token,
-        bot_user_id: Slink.Identity.bot_user_id(info.bot_token)
-      }
+      context = Context.socket_mode(info.bot_token)
+      %{context | bot_user_id: context.bot_user_id || info.bot_user_id}
     end
 
     defp event_callback(info, inner) do
@@ -254,8 +257,5 @@ if Application.compile_env(:slink, :playground, false) do
     defp dm_id(info) do
       Enum.find_value(info.channels, fn c -> c["is_im"] && c["id"] end)
     end
-
-    defp put_present(map, _key, nil), do: map
-    defp put_present(map, key, value), do: Map.put(map, key, value)
   end
 end

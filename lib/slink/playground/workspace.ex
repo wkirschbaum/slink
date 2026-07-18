@@ -5,9 +5,11 @@ if Application.compile_env(:slink, :playground, false) do
     # The fake workspace: one GenServer holding channels, messages, views,
     # response-url targets, files and the inspector log. Every mutation runs in
     # a handle_call and ends with a broadcast, so SSE subscribers always see a
-    # consistent snapshot.
+    # consistent snapshot. The state semantics live in WebApi; this process
+    # only serializes access, logs, and fans out.
 
     use GenServer
+    require Logger
 
     alias Slink.Playground.WebApi
 
@@ -29,7 +31,7 @@ if Application.compile_env(:slink, :playground, false) do
 
     def fetch_message(ws, channel, ts), do: GenServer.call(ws, {:fetch_message, channel, ts})
 
-    @doc "Fetch a view by id from the modal stack or the Home tab."
+    @doc "Fetch a view: `:home`, or an id from the modal stack or the Home tab."
     def fetch_view(ws, view_id), do: GenServer.call(ws, {:fetch_view, view_id})
 
     @doc "The stored inbound envelope behind inspector entry `id` (for redelivery)."
@@ -37,7 +39,16 @@ if Application.compile_env(:slink, :playground, false) do
 
     ## Mutations
 
-    def set_base_url(ws, url), do: GenServer.call(ws, {:set_base_url, url})
+    @doc """
+    Record the server's base URL once the listener knows its port.
+
+    `api_env_before` is the `:api_base_url` value the playground is about to
+    override — remembered so `terminate/2` can restore it when the playground
+    stops. Callers that never take the env over (unit tests) omit it.
+    """
+    def set_base_url(ws, url, api_env_before \\ :unset) do
+      GenServer.call(ws, {:set_base_url, url, api_env_before})
+    end
 
     @doc "A Web API call from the bot. Returns the Slack-shaped reply map."
     def api_call(ws, method, params), do: GenServer.call(ws, {:api, method, params})
@@ -78,6 +89,10 @@ if Application.compile_env(:slink, :playground, false) do
 
     @impl true
     def init(opts) do
+      # Trap exits so terminate/2 runs on supervisor shutdown and can restore
+      # the :api_base_url this playground took over.
+      Process.flag(:trap_exit, true)
+
       general = %{"id" => "C0GENERAL", "name" => "general", "is_im" => false}
       dm = %{"id" => "D0BOT", "name" => "slinkbot", "is_im" => true}
 
@@ -86,6 +101,7 @@ if Application.compile_env(:slink, :playground, false) do
          module: Keyword.fetch!(opts, :module),
          bot_token: Keyword.fetch!(opts, :bot_token),
          base_url: nil,
+         api_env_before: :unset,
          bot_user_id: "U0BOT",
          bot_id: "B0BOT",
          user_id: "U0DEV",
@@ -124,19 +140,32 @@ if Application.compile_env(:slink, :playground, false) do
       {:reply, JSON.encode!(snapshot_map(state)), state}
     end
 
-    def handle_call({:set_base_url, url}, _from, state) do
-      {:reply, :ok, %{state | base_url: url}}
+    def handle_call({:set_base_url, url, api_env_before}, _from, state) do
+      {:reply, :ok, %{state | base_url: url, api_env_before: api_env_before}}
     end
 
     def handle_call({:api, method, params}, _from, state) do
-      {reply, state, handled} = WebApi.call(state, method, params)
+      # A malformed request must answer like Slack would, never take the
+      # workspace (and all its state) down with it.
+      {reply, state, stubbed?} =
+        try do
+          {reply, state, handled} = WebApi.call(state, method, params)
+          {reply, state, handled == :stubbed}
+        rescue
+          e ->
+            Logger.error(
+              "Slink.Playground: #{method} crashed: #{Exception.format(:error, e, __STACKTRACE__)}"
+            )
+
+            {%{"ok" => false, "error" => "fatal_error"}, state, false}
+        end
 
       entry = %{
         "dir" => "out",
         "label" => method,
         "request" => params,
         "response" => reply,
-        "stubbed" => handled == :stubbed
+        "stubbed" => stubbed?
       }
 
       {:reply, reply, state |> log(entry) |> broadcast()}
@@ -179,12 +208,7 @@ if Application.compile_env(:slink, :playground, false) do
     end
 
     def handle_call({:human_message, channel, text, thread_ts}, _from, state) do
-      {ts, state} = WebApi.next_ts(state)
-
-      msg =
-        %{"type" => "message", "ts" => ts, "user" => state.user_id, "text" => text}
-        |> put_present("thread_ts", thread_ts)
-
+      {msg, state} = WebApi.human_message(state, text, thread_ts)
       state = WebApi.put_message(state, channel, msg)
       {:reply, {:ok, msg}, broadcast(state)}
     end
@@ -210,44 +234,31 @@ if Application.compile_env(:slink, :playground, false) do
     end
 
     def handle_call({:fetch_view, view_id}, _from, state) do
-      {:reply, find_view(state, view_id), state}
+      {:reply, WebApi.find_view(state, view_id), state}
     end
 
     def handle_call({:apply_ack, view_id, ack}, _from, state) do
-      state =
-        case ack["response_action"] || ack[:response_action] do
-          "errors" ->
-            # Validation failed: the modal stays; the browser renders the errors.
-            state
-
-          "clear" ->
-            put_in(state.views["stack"], [])
-
-          "update" ->
-            replace_view(state, view_id, view_param(ack))
-
-          "push" ->
-            {view, state} = mint_pushed_view(state, view_param(ack))
-            update_in(state.views["stack"], &(&1 ++ [view]))
-
-          _close ->
-            drop_view(state, view_id)
-        end
-
+      # Acks come from handler return values, so they may be atom-keyed (built
+      # with Slink.BlockKit); normalise once at this boundary — WebApi (and
+      # the stored stack) deal in wire shapes only.
+      state = WebApi.apply_ack(state, view_id, stringify(ack))
       {:reply, :ok, broadcast(state)}
     end
 
     def handle_call({:pop_view, view_id}, _from, state) do
-      case find_view(state, view_id) do
-        {:ok, view} -> {:reply, {:ok, view}, state |> drop_view(view_id) |> broadcast()}
-        :error -> {:reply, :error, state}
+      case WebApi.find_view(state, view_id) do
+        {:ok, view} ->
+          {:reply, {:ok, view}, state |> WebApi.drop_view(view["id"]) |> broadcast()}
+
+        :error ->
+          {:reply, :error, state}
       end
     end
 
     def handle_call({:log_inbound, label, envelope, response}, _from, state) do
       entry =
         %{"dir" => "in", "label" => label, "request" => envelope}
-        |> put_present("response", response)
+        |> WebApi.put_present("response", response)
 
       state = log(state, entry)
       [%{"id" => id} | _] = state.inspector
@@ -267,17 +278,34 @@ if Application.compile_env(:slink, :playground, false) do
       {:noreply, state}
     end
 
+    def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+    # Give :api_base_url back on shutdown, so a VM that outlives the
+    # playground (a test suite, an iex session) isn't left pointing at a dead
+    # port. Only undone if the env still holds this playground's URL.
+    @impl true
+    def terminate(_reason, %{api_env_before: before, base_url: base}) when is_binary(base) do
+      if before != :unset and Application.get_env(:slink, :api_base_url) == base <> "/api" do
+        case before do
+          nil -> Application.delete_env(:slink, :api_base_url)
+          url -> Application.put_env(:slink, :api_base_url, url)
+        end
+      end
+
+      :ok
+    end
+
+    def terminate(_reason, _state), do: :ok
+
     ## Internals
 
     defp snapshot_map(state) do
       %{
         "you" => state.user_id,
         "bot" => %{"user_id" => state.bot_user_id, "bot_id" => state.bot_id, "name" => "slinkbot"},
-        "team_id" => state.team_id,
         "channels" => state.channels,
         "messages" => state.messages,
         "views" => state.views,
-        "files" => state.files,
         "inspector" => state.inspector
       }
     end
@@ -298,47 +326,6 @@ if Application.compile_env(:slink, :playground, false) do
       %{state | inspector: Enum.take([entry | state.inspector], @inspector_cap)}
     end
 
-    defp find_view(state, view_id) do
-      cond do
-        state.views["home"] && state.views["home"]["id"] == view_id ->
-          {:ok, state.views["home"]}
-
-        view = Enum.find(state.views["stack"], &(&1["id"] == view_id)) ->
-          {:ok, view}
-
-        true ->
-          :error
-      end
-    end
-
-    defp drop_view(state, view_id) do
-      update_in(state.views["stack"], fn stack ->
-        Enum.reject(stack, &(&1["id"] == view_id))
-      end)
-    end
-
-    defp replace_view(state, view_id, new_view) do
-      update_in(state.views["stack"], fn stack ->
-        Enum.map(stack, fn
-          %{"id" => ^view_id} = old -> new_view |> stringify() |> Map.put("id", old["id"])
-          other -> other
-        end)
-      end)
-    end
-
-    defp mint_pushed_view(state, view) do
-      {n, state} = WebApi.next_seq(state)
-      id = "V" <> String.pad_leading(Integer.to_string(n), 4, "0")
-      {view |> stringify() |> Map.put("id", id), state}
-    end
-
-    defp view_param(ack), do: ack["view"] || ack[:view] || %{}
-
-    # Ack payloads come from handler return values, so their views may be
-    # atom-keyed (built with Slink.BlockKit); the workspace stores wire shapes.
     defp stringify(map), do: map |> JSON.encode!() |> JSON.decode!()
-
-    defp put_present(map, _key, nil), do: map
-    defp put_present(map, key, value), do: Map.put(map, key, value)
   end
 end

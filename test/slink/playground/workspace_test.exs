@@ -230,7 +230,11 @@ defmodule Slink.Playground.WorkspaceTest do
     %{"ts" => root} = api(ws, "chat.postMessage", %{"channel" => "C0GENERAL", "text" => "q"})
 
     %{"ok" => true, "ts" => ts} =
-      api(ws, "chat.startStream", %{"channel" => "C0GENERAL", "thread_ts" => root})
+      api(ws, "chat.startStream", %{
+        "channel" => "C0GENERAL",
+        "thread_ts" => root,
+        "recipient_user_id" => "U0DEV"
+      })
 
     assert {:ok, %{"streaming" => true}} = Workspace.fetch_message(ws, "C0GENERAL", ts)
 
@@ -249,6 +253,20 @@ defmodule Slink.Playground.WorkspaceTest do
   test "chat.startStream without a thread is invalid_arguments", %{ws: ws} do
     assert %{"error" => "invalid_arguments"} =
              api(ws, "chat.startStream", %{"channel" => "C0GENERAL"})
+  end
+
+  test "streaming into a channel needs recipient params, the app DM doesn't", %{ws: ws} do
+    %{"ts" => root} = api(ws, "chat.postMessage", %{"channel" => "C0GENERAL", "text" => "q"})
+
+    # Like Slack: a channel stream without recipient_user_id is rejected, which
+    # is what makes stream_reply/3 degrade to a plain post here too.
+    assert %{"error" => "invalid_arguments"} =
+             api(ws, "chat.startStream", %{"channel" => "C0GENERAL", "thread_ts" => root})
+
+    %{"ts" => dm_root} = api(ws, "chat.postMessage", %{"channel" => "D0BOT", "text" => "q"})
+
+    assert %{"ok" => true} =
+             api(ws, "chat.startStream", %{"channel" => "D0BOT", "thread_ts" => dm_root})
   end
 
   test "the upload flow mints a URL, records bytes and shares to a channel", %{ws: ws} do
@@ -319,11 +337,19 @@ defmodule Slink.Playground.WorkspaceTest do
     assert :unknown_token = Workspace.respond(ws, "nope", %{"text" => "x"})
   end
 
-  test "a slash-style response_url (no message) just posts", %{ws: ws} do
+  test "a slash-style response_url posts, then replace targets its own response", %{ws: ws} do
     "http://127.0.0.1:4040/respond/" <> token = Workspace.mint_response_url(ws, "C0GENERAL", nil)
 
+    # Nothing to replace yet — the first call just posts.
     %{"ok" => true} = Workspace.respond(ws, token, %{"text" => "ack", "replace_original" => true})
     assert [%{"text" => "ack", "ephemeral" => true}] = messages(ws, "C0GENERAL")
+
+    # From then on, replace_original rewrites the response it posted — the
+    # update_original/3 pattern after a slash command.
+    %{"ok" => true} =
+      Workspace.respond(ws, token, %{"text" => "done", "replace_original" => true})
+
+    assert [%{"text" => "done"}] = messages(ws, "C0GENERAL")
   end
 
   test "subscribers get a snapshot on every change and drop on exit", %{ws: ws} do
@@ -349,5 +375,45 @@ defmodule Slink.Playground.WorkspaceTest do
 
     assert %{"user" => "U0DEV", "thread_ts" => ^root} = reply
     assert [%{"reply_count" => 1}, _] = messages(ws, "C0GENERAL")
+  end
+
+  test "ephemeral messages never show up in history or replies", %{ws: ws} do
+    %{"ts" => root} = api(ws, "chat.postMessage", %{"channel" => "C0GENERAL", "text" => "real"})
+
+    api(ws, "chat.postEphemeral", %{"channel" => "C0GENERAL", "user" => "U0DEV", "text" => "psst"})
+
+    assert %{"messages" => [%{"text" => "real"}]} =
+             api(ws, "conversations.history", %{"channel" => "C0GENERAL"})
+
+    assert %{"messages" => [%{"text" => "real"}]} =
+             api(ws, "conversations.replies", %{"channel" => "C0GENERAL", "ts" => root})
+  end
+
+  test "deleting a thread reply decrements the root's reply_count", %{ws: ws} do
+    %{"ts" => root} = api(ws, "chat.postMessage", %{"channel" => "C0GENERAL", "text" => "root"})
+
+    %{"ts" => reply} =
+      api(ws, "chat.postMessage", %{"channel" => "C0GENERAL", "text" => "r", "thread_ts" => root})
+
+    assert %{"ok" => true} = api(ws, "chat.delete", %{"channel" => "C0GENERAL", "ts" => reply})
+    assert [%{"ts" => ^root, "reply_count" => 0}] = messages(ws, "C0GENERAL")
+  end
+
+  test "malformed upload params answer errors instead of crashing", %{ws: ws} do
+    # A garbage length parses to 0 rather than raising.
+    assert %{"ok" => true, "file_id" => id} =
+             api(ws, "files.getUploadURLExternal", %{"filename" => "x", "length" => "huge"})
+
+    %{"ok" => true} =
+      api(ws, "files.completeUploadExternal", %{
+        "files" => [%{"id" => id}],
+        "channel_id" => "C0GENERAL"
+      })
+
+    assert [%{"files" => [%{"id" => ^id, "size" => 0}]}] = messages(ws, "C0GENERAL")
+
+    # A file spec without an id is rejected the way Slack rejects bad args.
+    assert %{"error" => "invalid_arguments"} =
+             api(ws, "files.completeUploadExternal", %{"files" => [%{"title" => "no id"}]})
   end
 end

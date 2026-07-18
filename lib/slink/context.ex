@@ -30,4 +30,16 @@ defmodule Slink.Context do
           bot_user_id: String.t() | nil,
           event: Slink.Event.t() | nil
         }
+
+  # The per-event context a Socket-Mode-shaped transport builds: identity from
+  # the Slink.Identity cache, event filled in by the dispatcher. One
+  # constructor, so the real transport and the playground can't drift apart.
+  @doc false
+  def socket_mode(bot_token) do
+    %__MODULE__{
+      transport: :socket_mode,
+      bot_token: bot_token,
+      bot_user_id: Slink.Identity.bot_user_id(bot_token)
+    }
+  end
 end

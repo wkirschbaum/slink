@@ -43,8 +43,9 @@ defmodule Slink.Playground do
   Inbound events are Socket-Mode envelopes run through the same normaliser and
   dispatcher as production, and outbound calls go over real HTTP through the
   real rate limiter — the playground boots by pointing `config :slink,
-  :api_base_url` at itself (VM-global, so don't run a real transport in the
-  same VM; a warning is logged if one is). Replies pace at Slack's ~1
+  :api_base_url` at itself (VM-global while it runs, restored on shutdown; a
+  warning is logged if a real transport is in the same VM). Replies pace at
+  Slack's ~1
   message/second/channel; lower `config :slink, :rate_interval_ms` if that
   slows your dev loop. See the [Playground guide](playground.html) for the
   full fidelity notes.
@@ -117,13 +118,17 @@ defmodule Slink.Playground do
       base = "http://127.0.0.1:#{port}"
 
       workspace = workspace_name(name)
-      :ok = Slink.Playground.Workspace.set_base_url(workspace, base)
+      api_env_before = Application.get_env(:slink, :api_base_url)
 
-      case Application.get_env(:slink, :api_base_url) do
-        nil -> :ok
-        url -> Logger.warning("Slink.Playground: overriding :api_base_url (was #{inspect(url)})")
+      if api_env_before do
+        Logger.warning(
+          "Slink.Playground: overriding :api_base_url (was #{inspect(api_env_before)}) — " <>
+            "restored when the playground stops"
+        )
       end
 
+      # The workspace remembers the previous value and restores it on shutdown.
+      :ok = Slink.Playground.Workspace.set_base_url(workspace, base, api_env_before)
       Application.put_env(:slink, :api_base_url, base <> "/api")
 
       if Process.whereis(Slink.SocketMode) do
