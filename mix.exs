@@ -1,7 +1,7 @@
 defmodule Slink.MixProject do
   use Mix.Project
 
-  @version "0.6.0"
+  @version "0.7.0"
   @source_url "https://github.com/wkirschbaum/slink"
 
   def project do
@@ -44,12 +44,12 @@ defmodule Slink.MixProject do
 
   defp deps do
     [
-      {:req, "~> 0.6"},
+      {:req, "~> 0.7"},
       {:mint_web_socket, "~> 1.0"},
       {:telemetry, "~> 1.0"},
       {:plug, "~> 1.20"},
       # Optional: only needed if you run the Events API adapter as a standalone server.
-      {:bandit, "~> 1.12", optional: true},
+      {:bandit, "~> 1.12 and >= 1.12.5", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       # Test-only: stand up a local fake-Slack WebSocket server to prove the Socket Mode path.
       {:websock_adapter, "~> 0.5", only: :test}

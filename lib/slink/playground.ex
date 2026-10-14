@@ -18,7 +18,7 @@ defmodule Slink.Playground do
       config :slink, playground: true
 
       # mix.exs
-      {:bandit, "~> 1.12", only: :dev}
+      {:bandit, "~> 1.12 and >= 1.12.5", only: :dev}
 
   Changing the flag changes slink's compile-time config, so Mix will ask you to
   recompile it (`mix deps.compile slink --force`). Then start the playground in
@@ -63,7 +63,7 @@ defmodule Slink.Playground do
       unless Code.ensure_loaded?(Bandit) do
         raise ArgumentError,
               "Slink.Playground needs the optional :bandit dependency; add " <>
-                ~s({:bandit, "~> 1.12", only: :dev} to your deps)
+                ~s({:bandit, "~> 1.12 and >= 1.12.5", only: :dev} to your deps)
       end
 
       name = Keyword.get(opts, :name, __MODULE__)

@@ -23,7 +23,7 @@ config :slink, playground: true
 
 ```elixir
 # mix.exs — Bandit is slink's optional HTTP server
-{:bandit, "~> 1.12", only: :dev}
+{:bandit, "~> 1.12 and >= 1.12.5", only: :dev}
 ```
 
 ```elixir

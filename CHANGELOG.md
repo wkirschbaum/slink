@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-10-14
 
 ### Added
 
@@ -19,6 +19,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Compiled out of slink unless `config :slink, playground: true` is set, and
   needs the optional `:bandit` dep. See the new
   [Playground guide](guides/playground.md).
+
+### Changed
+
+- **Requires Req 0.7** (`{:req, "~> 0.7"}`, was `~> 0.6`). Slink's Web API
+  calls (`auth:`, `form:`, `json:`, custom `retry:`) are unaffected by 0.7's
+  breaking changes, and a 429's `Retry-After` is still honoured. Apps that pin
+  Req to 0.6 themselves need to move to 0.7.
+- The optional `:bandit` dep now requires `~> 1.12 and >= 1.12.5` (was
+  `~> 1.12`): 1.12.1–1.12.5 fix several WebSocket and HTTP/2 security
+  advisories in the server the Playground runs on.
+- Locked `mint` 1.9.3 → 1.11.0 (fixes six CVEs reachable from a malicious
+  server in HTTP/1 and HTTP/2 response parsing) with `hpax` 1.1.0 and `finch`
+  0.24.0, and `mint_web_socket` 1.0.5 → 1.0.6.
+- Updated `plug_crypto` 2.2.0 and dev-only `ex_doc` 0.40.4, `earmark_parser`
+  and `makeup`.
 
 ## [0.6.0] - 2026-07-17
 
@@ -466,6 +481,7 @@ Initial release.
 - `Slink.enabled?/1` to conditionally start a bot from config.
 - A shippable app manifest (`manifest.json`) and a runnable `Slink.ExampleBot`.
 
+[0.7.0]: https://github.com/wkirschbaum/slink/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/wkirschbaum/slink/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/wkirschbaum/slink/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/wkirschbaum/slink/compare/v0.4.0...v0.5.0
