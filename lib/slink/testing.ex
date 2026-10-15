@@ -349,9 +349,12 @@ defmodule Slink.Testing do
     # an external :kill, which is exactly what an ExUnit test *timeout*
     # delivers. Register a second, idempotent restore through on_exit (it runs
     # in a separate process), so a hung handler can't leave the seams swapped
-    # for the rest of the suite. Outside ExUnit, on_exit raises — ignore.
+    # for the rest of the suite. It only restores a seam still holding what we
+    # installed: once `after` has restored, the test may set the env itself, and
+    # the backstop (running after the test) must not put stale values back.
+    # Outside ExUnit, on_exit raises — ignore.
     try do
-      ExUnit.Callbacks.on_exit(fn -> restore_seams(previous) end)
+      ExUnit.Callbacks.on_exit(fn -> restore_installed_seams(previous, seams) end)
     rescue
       _not_in_a_test -> :ok
     end
@@ -416,6 +419,14 @@ defmodule Slink.Testing do
         :error -> Application.delete_env(:slink, key)
       end
     end
+  end
+
+  defp restore_installed_seams(previous, seams) do
+    previous
+    |> Enum.filter(fn {key, _previous} ->
+      Application.fetch_env(:slink, key) == {:ok, Keyword.fetch!(seams, key)}
+    end)
+    |> restore_seams()
   end
 
   defp collect(ref, kind, acc \\ []) do

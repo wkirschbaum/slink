@@ -271,5 +271,19 @@ defmodule Slink.TestingTest do
       assert Application.get_env(:slink, :api_caller) == nil
       Application.delete_env(:slink, :rate_sender)
     end
+
+    test "the on_exit backstop leaves alone a seam the test changed after the run" do
+      # Registered before run/3, so it runs *after* run/3's own on_exit restore
+      # and sees what that restore left behind for the rest of the suite.
+      on_exit(fn ->
+        leaked = Application.get_env(:slink, :rate_sender)
+        Application.delete_env(:slink, :rate_sender)
+        assert leaked == nil
+      end)
+
+      Application.put_env(:slink, :rate_sender, :sentinel)
+      run(EchoBot, event(:app_mention, text: "hi"))
+      Application.delete_env(:slink, :rate_sender)
+    end
   end
 end
